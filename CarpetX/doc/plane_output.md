@@ -8,13 +8,14 @@ AMR-aware (per-level snap), Cartesian patches only.
 
 - **Commit 1**: shared infrastructure — parameters, spec parsing,
   tag formatting, per-level grid snap, 3D-FAB slab extraction.
-- **Commit 2 (this commit)**: Silo writer for non-staggered (rank-0
-  all-VC and rank-3 all-CC) groups; dispatch wired in
-  `io.cxx::OutputGH`; smoke-test parfile under `TestOutput`. Skips
-  rank-1/2 staggered groups and non-Cartesian patches with one-time
-  warnings.
-- **Commit 3**: Silo per-group-mesh fallback for rank-1 / rank-2
-  staggered groups (avoids the `assert(0)` at `io_silo.cxx:1118`).
+- **Commit 2**: Silo writer for non-staggered (rank-0 all-VC and
+  rank-3 all-CC) groups; dispatch wired in `io.cxx::OutputGH`;
+  smoke-test parfile under `TestOutput`.
+- **Commit 3 (this commit)**: Silo per-group-mesh path for rank-1 /
+  rank-2 staggered groups. All 3D indextypes now handled; mesh
+  sharing key extended with an in-plane centering tag so per-group
+  meshes don't collide with the shared mesh. Avoids the `assert(0)`
+  at `io_silo.cxx:1118`.
 - **Commit 4**: openPMD writer, mirroring the Silo design.
 
 ## Parameters
@@ -36,8 +37,9 @@ world-coordinate along the normal axis (z, y, or x).
 `<plane>_<axis>_<sign><int>p<frac>` — e.g. `xy_z_pos0012p500` for
 z=+12.500, `xz_y_neg0003p000` for y=−3.000. Survives Silo's
 `legalize_name` and HDF5 / ADIOS2 identifier rules. Mesh names get
-an extra 2-char in-plane centering suffix (`vv`/`cc`/`cv`/`vc`) when
-the per-group fallback path is used (commit 3).
+an extra 2-char in-plane centering suffix (`cv` / `vc`) when the
+per-group mesh path is used for in-plane rank-1 staggered groups;
+rank-0 / rank-2 groups omit the suffix and share a mesh.
 
 ## Snapping
 
@@ -69,7 +71,9 @@ data still displays in VisIt, but level shadowing is manual.)
 ```
 CarpetX/src/io_planes.{hxx,cxx}        spec parsing, tag formatting,
                                        per-level snap, slab extraction
-CarpetX/src/io_silo_planes.{hxx,cxx}   OutputSiloPlanes — rank-0/3 path
+CarpetX/src/io_silo_planes.{hxx,cxx}   OutputSiloPlanes; shared mesh
+                                       for in-plane rank-0/2, per-group
+                                       mesh for rank-1 staggered groups
 CarpetX/src/io.cxx                     dispatch (out_silo_planes block)
 CarpetX/param.ccl                      8 new parameters
 CarpetX/src/make.code.defn             two new sources registered
