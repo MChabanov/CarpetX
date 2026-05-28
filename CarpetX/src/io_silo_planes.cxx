@@ -70,9 +70,12 @@ inline std::array<int, 2> in_plane_axes(int normal_axis) {
 
 struct plane_mesh_props_t {
   std::array<int, 2> nghosts;
+  std::string centering_tag;
   friend bool operator<(const plane_mesh_props_t &p,
                         const plane_mesh_props_t &q) {
-    return p.nghosts < q.nghosts;
+    if (p.nghosts != q.nghosts)
+      return p.nghosts < q.nghosts;
+    return p.centering_tag < q.centering_tag;
   }
 };
 
@@ -97,13 +100,17 @@ std::string make_plane_filename(const std::string &file_name,
 }
 
 std::string make_plane_meshname(const std::string &plane_tag,
+                                const std::string &centering_tag,
                                 const std::array<int, 2> &nghosts,
                                 int patch = -1, int reflevel = -1,
                                 int component = -1) {
   assert((patch == -1) == (reflevel == -1));
   assert((patch == -1) == (component == -1));
   std::ostringstream buf;
-  buf << (patch >= 0 ? "box" : "gh") << "." << plane_tag << ".ghosts";
+  buf << (patch >= 0 ? "box" : "gh") << "." << plane_tag;
+  if (!centering_tag.empty())
+    buf << "." << centering_tag;
+  buf << ".ghosts";
   for (int d = 0; d < 2; ++d) {
     if (d > 0)
       buf << "_";
@@ -183,7 +190,6 @@ void OutputSiloPlanes(const cGH *const cctkGH,
   DBSetEnableChecksums(1);
 
   static std::set<int> warned_noncart_patches;
-  static std::set<int> warned_skipped_groups;
   static std::set<std::string> warned_outside_domain;
 
   static std::once_flag create_out_dir;
@@ -245,28 +251,22 @@ void OutputSiloPlanes(const cGH *const cctkGH,
           const amrex::IndexType &indextype = mfab.ixType();
           const amrex::DistributionMapping &dm = mfab.DistributionMap();
 
-          const int rank3 = int(indextype.cellCentered(0)) +
-                            int(indextype.cellCentered(1)) +
-                            int(indextype.cellCentered(2));
-          if (rank3 != 0 && rank3 != 3) {
-            if (warned_skipped_groups.insert(gi).second)
-              CCTK_VWARN(CCTK_WARN_ALERT,
-                         "OutputSiloPlanes: skipping staggered group %s "
-                         "(rank-%d); supported in a follow-up commit",
-                         CCTK_FullGroupName(gi), rank3);
-            continue;
-          }
-
           const int slice_idx = snap_to_grid_index(plane, geom, indextype);
           if (slice_idx < 0)
             continue;
 
-          const bool in_plane_cc = (rank3 == 3);
-          const int centering = in_plane_cc ? DB_ZONECENT : DB_NODECENT;
+          const bool cv_a = indextype.cellCentered(axis_a);
+          const bool cv_b = indextype.cellCentered(axis_b);
+          const int in_plane_rank = int(cv_a) + int(cv_b);
+          const bool per_group_mesh = (in_plane_rank == 1);
+          const int centering =
+              (in_plane_rank == 2) ? DB_ZONECENT : DB_NODECENT;
+          const std::string centering_tag =
+              per_group_mesh ? (cv_a ? "cv" : "vc") : std::string("");
 
           const std::array<int, dim> &nghosts3 = groupdata.nghostzones;
           const plane_mesh_props_t mesh_props{
-              {nghosts3[axis_a], nghosts3[axis_b]}};
+              {nghosts3[axis_a], nghosts3[axis_b]}, centering_tag};
           const bool have_mesh = have_meshes.count(mesh_props);
 
           const int ncomponents = dm.size();
@@ -319,22 +319,26 @@ void OutputSiloPlanes(const cGH *const cctkGH,
             any_slab_emitted = true;
 
             if (!have_mesh) {
-              const std::array<int, 2> dims_vc = {
-                  dims[0] + int(indextype.cellCentered(axis_a)),
-                  dims[1] + int(indextype.cellCentered(axis_b))};
+              const std::array<int, 2> dims_vc =
+                  per_group_mesh ? dims
+                                 : std::array<int, 2>{dims[0] + int(cv_a),
+                                                      dims[1] + int(cv_b)};
 
               std::array<std::vector<CCTK_REAL>, 2> coords;
               std::array<const void *, 2> coord_ptrs;
               for (int d = 0; d < 2; ++d) {
                 const int ax = (d == 0) ? axis_a : axis_b;
+                const bool ax_cc = (d == 0) ? cv_a : cv_b;
+                const double offset = (per_group_mesh && ax_cc) ? 0.5 : 0.0;
                 coords[d].resize(dims_vc[d]);
                 for (int i = 0; i < dims_vc[d]; ++i)
-                  coords[d][i] = x0[ax] + (fabbox.smallEnd(ax) + i) * dx[ax];
+                  coords[d][i] =
+                      x0[ax] + (fabbox.smallEnd(ax) + i + offset) * dx[ax];
                 coord_ptrs[d] = coords[d].data();
               }
 
               const std::string meshname = make_plane_meshname(
-                  plane.tag, mesh_props.nghosts, patchdata.patch,
+                  plane.tag, centering_tag, mesh_props.nghosts, patchdata.patch,
                   leveldata.level, component);
 
               const DB::ptr<DBoptlist> optlist = DB::make(DBMakeOptlist(10));
@@ -374,8 +378,8 @@ void OutputSiloPlanes(const cGH *const cctkGH,
             }
 
             const std::string meshname = make_plane_meshname(
-                plane.tag, mesh_props.nghosts, patchdata.patch, leveldata.level,
-                component);
+                plane.tag, centering_tag, mesh_props.nghosts, patchdata.patch,
+                leveldata.level, component);
 
             const DB::ptr<DBoptlist> var_optlist = DB::make(DBMakeOptlist(10));
             assert(var_optlist);
@@ -457,15 +461,16 @@ void OutputSiloPlanes(const cGH *const cctkGH,
         const amrex::MultiFab &mfab0 = *groupdata0.mfab[tl];
         const amrex::IndexType &indextype = mfab0.ixType();
 
-        const int rank3 = int(indextype.cellCentered(0)) +
-                          int(indextype.cellCentered(1)) +
-                          int(indextype.cellCentered(2));
-        if (rank3 != 0 && rank3 != 3)
-          continue;
+        const bool cv_a = indextype.cellCentered(axis_a);
+        const bool cv_b = indextype.cellCentered(axis_b);
+        const std::string centering_tag =
+            (int(cv_a) + int(cv_b) == 1)
+                ? (cv_a ? std::string("cv") : std::string("vc"))
+                : std::string("");
 
         const std::array<int, dim> &nghosts3 = groupdata0.nghostzones;
         const plane_mesh_props_t mesh_props{
-            {nghosts3[axis_a], nghosts3[axis_b]}};
+            {nghosts3[axis_a], nghosts3[axis_b]}, centering_tag};
 
         std::vector<std::string> meshnames;
         std::vector<std::vector<std::string> > varnames_per_var(numvars);
@@ -501,8 +506,9 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                                       proc / ioproc_every);
               const std::string meshname =
                   proc_filename + ":" +
-                  make_plane_meshname(plane.tag, mesh_props.nghosts,
-                                      patchdata.patch, leveldata.level, c);
+                  make_plane_meshname(plane.tag, centering_tag,
+                                      mesh_props.nghosts, patchdata.patch,
+                                      leveldata.level, c);
               meshnames.push_back(meshname);
 
               for (int vi = 0; vi < numvars; ++vi) {
@@ -521,7 +527,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
 
         if (!meta_have_meshes.count(mesh_props)) {
           const std::string multimeshname =
-              make_plane_meshname(plane.tag, mesh_props.nghosts);
+              make_plane_meshname(plane.tag, centering_tag, mesh_props.nghosts);
           std::vector<const char *> meshname_ptrs;
           meshname_ptrs.reserve(meshnames.size());
           for (const auto &s : meshnames)
@@ -547,7 +553,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
         }
 
         const std::string multimeshname =
-            make_plane_meshname(plane.tag, mesh_props.nghosts);
+            make_plane_meshname(plane.tag, centering_tag, mesh_props.nghosts);
         const DB::ptr<DBoptlist> mv_optlist = DB::make(DBMakeOptlist(10));
         assert(mv_optlist);
         int cycle = cctk_iteration;
