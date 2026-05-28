@@ -39,6 +39,7 @@ SRCS =							\
 	io_openpmd.cxx					\
 	io_planes.cxx					\
 	io_silo.cxx					\
+	io_silo_planes.cxx				\
 	io_tsv.cxx					\
 	linsolve.cxx					\
 	logo.cxx					\

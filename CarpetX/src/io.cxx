@@ -4,7 +4,9 @@
 #include "io_meta.hxx"
 #include "io_norm.hxx"
 #include "io_openpmd.hxx"
+#include "io_planes.hxx"
 #include "io_silo.hxx"
+#include "io_silo_planes.hxx"
 #include "io_tsv.hxx"
 #include "schedule.hxx"
 #include "timer.hxx"
@@ -381,7 +383,7 @@ void OutputPlotfile(const cGH *restrict cctkGH) {
           visit << basename << "/Header\n";
           visit.close();
         } // if is_root
-      } // for patchdata
+      }   // for patchdata
     }
   }
 }
@@ -597,6 +599,26 @@ int OutputGH(const cGH *restrict cctkGH) {
       if (strlen(out_silo_vars) != 0)
         CCTK_VERROR("Silo is not enabled. The parameter "
                     "CarpetX::out_silo_vars must be empty.");
+#endif
+    }
+  }
+
+  {
+    const int silo_every = out_silo_every == -1 ? out_every : out_silo_every;
+    const int every =
+        out_silo_planes_every == -1 ? silo_every : out_silo_planes_every;
+    if (every > 0 && cctk_iteration % every == 0 &&
+        strlen(out_silo_planes) != 0) {
+      const std::vector<bool> group_enabled =
+          find_groups("Silo planes", out_silo_plane_vars);
+#ifdef HAVE_CAPABILITY_Silo
+      const std::vector<plane_spec_t> planes = parse_planes(
+          out_silo_planes, out_planes_int_precision, out_planes_frac_precision);
+      const std::string simulation_name = get_simulation_name();
+      OutputSiloPlanes(cctkGH, group_enabled, planes, out_dir, simulation_name);
+#else
+      CCTK_VERROR("Silo is not enabled. The parameter "
+                  "CarpetX::out_silo_planes must be empty.");
 #endif
     }
   }
