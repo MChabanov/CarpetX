@@ -630,6 +630,23 @@ INT out_openpmd_every "Output in openPMD format every that many iterations" STEE
   1:* :: "every that many iterations"
 } -1
 
+STRING out_openpmd_plane_vars "Variables to output as 2d axis-aligned planes in openPMD format" STEERABLE=always
+{
+  ".*" :: ""
+} ""
+
+STRING out_openpmd_planes "Plane specs for openPMD 2d output, e.g. 'xy:0.0, xy:10.0, xz:0.0'" STEERABLE=always
+{
+  ".*" :: ""
+} ""
+
+INT out_openpmd_planes_every "Output openPMD plane data every that many iterations" STEERABLE=always
+{
+  -1 :: "use value of CarpetX::out_openpmd_every"
+  0 :: "never output openPMD planes"
+  1:* :: "every that many iterations"
+} -1
+
 
 
 STRING out_plotfile_groups "Groups to output as AMReX plotfile" STEERABLE=always
@@ -662,6 +679,33 @@ STRING out_silo_compression_options "Compression options (method and level) to u
 {
   ".*" :: ""
 } "METHOD=GZIP LEVEL=1"
+
+STRING out_silo_plane_vars "Variables to output as 2d axis-aligned planes in Silo format" STEERABLE=always
+{
+  ".*" :: ""
+} ""
+
+STRING out_silo_planes "Plane specs for Silo 2d output, e.g. 'xy:0.0, xy:10.0, xz:0.0'" STEERABLE=always
+{
+  ".*" :: ""
+} ""
+
+INT out_silo_planes_every "Output Silo plane data every that many iterations" STEERABLE=always
+{
+  -1 :: "use value of CarpetX::out_silo_every"
+  0 :: "never output Silo planes"
+  1:* :: "every that many iterations"
+} -1
+
+INT out_planes_int_precision "Minimum number of integer digits in plane-elevation tag (zero-padded)" STEERABLE=always
+{
+  1:8 :: "minimum integer digits"
+} 4
+
+INT out_planes_frac_precision "Number of fractional digits in plane-elevation tag" STEERABLE=always
+{
+  0:8 :: "fractional digits"
+} 3
 
 
 
