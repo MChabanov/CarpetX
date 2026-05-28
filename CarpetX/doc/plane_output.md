@@ -6,11 +6,13 @@ AMR-aware (per-level snap), Cartesian patches only.
 
 ## Status
 
-- **Commit 1 (this commit)**: shared infrastructure — parameters,
-  spec parsing, tag formatting, per-level grid snap, 3D-FAB slab
-  extraction. No writer integration yet.
-- **Commit 2**: Silo writer, rank-0 / rank-3 groups (one shared 2D
-  vertex mesh per ghost/patch/level/component) + dispatch + tests.
+- **Commit 1**: shared infrastructure — parameters, spec parsing,
+  tag formatting, per-level grid snap, 3D-FAB slab extraction.
+- **Commit 2 (this commit)**: Silo writer for non-staggered (rank-0
+  all-VC and rank-3 all-CC) groups; dispatch wired in
+  `io.cxx::OutputGH`; smoke-test parfile under `TestOutput`. Skips
+  rank-1/2 staggered groups and non-Cartesian patches with one-time
+  warnings.
 - **Commit 3**: Silo per-group-mesh fallback for rank-1 / rank-2
   staggered groups (avoids the `assert(0)` at `io_silo.cxx:1118`).
 - **Commit 4**: openPMD writer, mirroring the Silo design.
@@ -46,14 +48,32 @@ nearest vertex (VC: `x0 + i·dx`) or cell center (CC: `x0 + (i+½)·dx`).
 Out-of-domain elevations and non-Cartesian patches produce a one-time
 warning and are skipped.
 
+## Output files
+
+Per plane: one data file per ioproc plus a metafile, all under a
+per-iteration subdirectory:
+
+```
+<out_dir>/<sim>.<plane_tag>.it<8-digit-iter>.silo_planes.dir/
+    <sim>.<plane_tag>.it<...>.p<6-digit-ioproc>.silo
+<out_dir>/<sim>.<plane_tag>.it<...>.silo                metafile
+<out_dir>/<sim>.<plane_tag>.silo_planes.visit          VisIt index
+```
+
+The metafile holds `DBPutMultimesh`/`DBPutMultivar` references to all
+per-block 2D quadmeshes/quadvars. (Full AMR `DBmrgtree` deferred —
+data still displays in VisIt, but level shadowing is manual.)
+
 ## File layout
 
 ```
-CarpetX/src/io_planes.{hxx,cxx}   plane_spec_t, parse_planes,
-                                  format_plane_tag, snap_to_grid_index,
-                                  extract_slab
-CarpetX/param.ccl                 8 new parameters
-CarpetX/src/make.code.defn        io_planes.cxx registered
+CarpetX/src/io_planes.{hxx,cxx}        spec parsing, tag formatting,
+                                       per-level snap, slab extraction
+CarpetX/src/io_silo_planes.{hxx,cxx}   OutputSiloPlanes — rank-0/3 path
+CarpetX/src/io.cxx                     dispatch (out_silo_planes block)
+CarpetX/param.ccl                      8 new parameters
+CarpetX/src/make.code.defn             two new sources registered
+TestOutput/test/output-silo-planes.par smoke-test parfile
 ```
 
 ## Why Cartesian-only
