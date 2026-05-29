@@ -11,12 +11,18 @@ AMR-aware (per-level snap), Cartesian patches only.
 - **Commit 2**: Silo writer for non-staggered (rank-0 all-VC and
   rank-3 all-CC) groups; dispatch wired in `io.cxx::OutputGH`;
   smoke-test parfile under `TestOutput`.
-- **Commit 3 (this commit)**: Silo per-group-mesh path for rank-1 /
-  rank-2 staggered groups. All 3D indextypes now handled; mesh
-  sharing key extended with an in-plane centering tag so per-group
-  meshes don't collide with the shared mesh. Avoids the `assert(0)`
-  at `io_silo.cxx:1118`.
-- **Commit 4**: openPMD writer, mirroring the Silo design.
+- **Commit 3**: Silo per-group-mesh path for rank-1 / rank-2
+  staggered groups. All 3D indextypes now handled; mesh sharing key
+  extended with an in-plane centering tag so per-group meshes don't
+  collide with the shared mesh. Avoids the `assert(0)` at
+  `io_silo.cxx:1118`.
+- **Commit 4 (this commit)**: openPMD writer
+  (`OutputOpenPMDPlanes`). Per-plane local `openPMD::Series`
+  (file-per-plane via the `it%08T` template), per-(group, patch,
+  level) 2D mesh, per-component `storeChunk` with shared_ptr
+  aliasing. Cell-centring encoded via `setPosition` per axis (no
+  per-group-mesh dichotomy needed). Interior-only data, matching
+  the existing 3D openPMD convention.
 
 ## Parameters
 
@@ -52,19 +58,31 @@ warning and are skipped.
 
 ## Output files
 
-Per plane: one data file per ioproc plus a metafile, all under a
-per-iteration subdirectory:
+Per plane: one data file per ioproc plus a metafile (Silo) or one
+file per iteration (openPMD), under per-iteration subdirectories:
 
 ```
-<out_dir>/<sim>.<plane_tag>.it<8-digit-iter>.silo_planes.dir/
-    <sim>.<plane_tag>.it<...>.p<6-digit-ioproc>.silo
-<out_dir>/<sim>.<plane_tag>.it<...>.silo                metafile
-<out_dir>/<sim>.<plane_tag>.silo_planes.visit          VisIt index
+Silo:
+  <out_dir>/<sim>.<plane_tag>.it<...>.silo_planes.dir/
+      <sim>.<plane_tag>.it<...>.p<6-digit-ioproc>.silo
+  <out_dir>/<sim>.<plane_tag>.it<...>.silo               metafile
+  <out_dir>/<sim>.<plane_tag>.silo_planes.visit          VisIt index
+
+openPMD:
+  <out_dir>/<sim>.<plane_tag>.it<...>.<ext>              one per iteration
+  <out_dir>/<sim>.<plane_tag>.openpmd.visit              VisIt index
 ```
 
-The metafile holds `DBPutMultimesh`/`DBPutMultivar` references to all
-per-block 2D quadmeshes/quadvars. (Full AMR `DBmrgtree` deferred —
+Silo metafile holds `DBPutMultimesh` / `DBPutMultivar` references to
+all per-block 2D quadmeshes/quadvars. (Full AMR `DBmrgtree` deferred —
 data still displays in VisIt, but level shadowing is manual.)
+
+openPMD output uses MPI-collective `storeChunk`; cell-centring is
+encoded per-component via `setPosition({0.5, 0.5})` (etc.) and the
+mesh extent is the level's vertex grid along the two in-plane axes.
+Data is interior-only (ghosts stripped), matching the existing 3D
+openPMD output convention; Silo plane data includes ghost cells with
+`DBOPT_LO_OFFSET` / `HI_OFFSET` markers, matching its 3D counterpart.
 
 ## File layout
 
@@ -74,10 +92,14 @@ CarpetX/src/io_planes.{hxx,cxx}        spec parsing, tag formatting,
 CarpetX/src/io_silo_planes.{hxx,cxx}   OutputSiloPlanes; shared mesh
                                        for in-plane rank-0/2, per-group
                                        mesh for rank-1 staggered groups
-CarpetX/src/io.cxx                     dispatch (out_silo_planes block)
+CarpetX/src/io_openpmd.{hxx,cxx}       OutputOpenPMDPlanes; per-plane
+                                       Series, per-(group,patch,level)
+                                       2D Mesh, setPosition for centring
+CarpetX/src/io.cxx                     dispatch (silo & openpmd planes)
 CarpetX/param.ccl                      8 new parameters
-CarpetX/src/make.code.defn             two new sources registered
-TestOutput/test/output-silo-planes.par smoke-test parfile
+CarpetX/src/make.code.defn             io_planes.cxx, io_silo_planes.cxx
+TestOutput/test/output-silo-planes.par     smoke-test (Silo)
+TestOutput/test/output-openpmd-planes.par  smoke-test (openPMD)
 ```
 
 ## Why Cartesian-only
