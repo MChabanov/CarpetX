@@ -6,6 +6,7 @@
 #include "mpi_types.hxx"
 #include "timer.hxx"
 
+#include <CactusBase/IOUtil/src/ioutil_CheckpointRecovery.h>
 #include <cctk.h>
 #include <cctk_Arguments.h>
 #include <cctk_Parameters.h>
@@ -26,6 +27,7 @@
 #include <climits>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <memory>
@@ -217,6 +219,16 @@ void OutputSiloPlanes(const cGH *const cctkGH,
       file = DB::make(DBCreate(filename.c_str(), DB_CLOBBER, DB_LOCAL,
                                output_file.c_str(), DB_HDF5));
       assert(file);
+
+      {
+        char *const data = IOUtil_GetAllParameters(cctkGH, 1 /*all*/);
+        const std::string parameters(data);
+        std::free(data);
+        const int pdims = parameters.length();
+        ierr = DBWrite(file.get(), "AllParameters", parameters.data(), &pdims,
+                       1, DB_CHAR);
+        assert(!ierr);
+      }
     }
 
     bool any_slab_emitted = false;
@@ -375,6 +387,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                                    planes_ndims, db_datatype_v<CCTK_REAL>,
                                    DB_COLLINEAR, optlist.get());
               assert(!ierr);
+              have_meshes.insert(mesh_props);
             }
 
             const std::string meshname = make_plane_meshname(
@@ -413,7 +426,6 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               assert(!ierr);
             }
           }
-          have_meshes.insert(mesh_props);
         }
       }
     }
@@ -435,6 +447,16 @@ void OutputSiloPlanes(const cGH *const cctkGH,
           DB::make(DBCreate(metafilename.c_str(), DB_CLOBBER, DB_LOCAL,
                             output_file.c_str(), DB_HDF5));
       assert(metafile);
+
+      {
+        char *const data = IOUtil_GetAllParameters(cctkGH, 1 /*all*/);
+        const std::string parameters(data);
+        std::free(data);
+        const int pdims = parameters.length();
+        ierr = DBWrite(metafile.get(), "AllParameters", parameters.data(),
+                       &pdims, 1, DB_CHAR);
+        assert(!ierr);
+      }
 
       {
         const int mdims = 1;
@@ -478,6 +500,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
         struct slab_t {
           int patch, level, component, proc;
           std::array<int, 2> ilo, ihi;
+          std::array<int, 2> interior_ilo, interior_ihi;
           std::array<double, 2> xlo, xhi;
           int zonecount;
         };
@@ -522,6 +545,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               if (slice_idx < fabbox.smallEnd(plane.normal_axis) ||
                   slice_idx > fabbox.bigEnd(plane.normal_axis))
                 continue;
+              const amrex::Box &validbox = mfab.box(c);
 
               slab_t s;
               s.patch = patch;
@@ -530,6 +554,10 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               s.proc = dm[c];
               s.ilo = {fabbox.smallEnd(axis_a), fabbox.smallEnd(axis_b)};
               s.ihi = {fabbox.bigEnd(axis_a), fabbox.bigEnd(axis_b)};
+              s.interior_ilo = {validbox.smallEnd(axis_a),
+                                validbox.smallEnd(axis_b)};
+              s.interior_ihi = {validbox.bigEnd(axis_a),
+                                validbox.bigEnd(axis_b)};
               s.xlo = {
                   double(x0[axis_a] + fabbox.smallEnd(axis_a) * dx[axis_a]),
                   double(x0[axis_b] + fabbox.smallEnd(axis_b) * dx[axis_b])};
@@ -607,13 +635,16 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                 continue;
               const int fine_comp0 = comp0_level_patch[fine_level][s.patch];
               const int fine_ncomps = ncomps_level_patch[fine_level][s.patch];
-              const std::array<int, 2> ref_lo = {2 * s.ilo[0], 2 * s.ilo[1]};
-              const std::array<int, 2> ref_hi = {2 * s.ihi[0] + 1,
-                                                 2 * s.ihi[1] + 1};
+              const std::array<int, 2> ref_lo = {2 * s.interior_ilo[0],
+                                                 2 * s.interior_ilo[1]};
+              const std::array<int, 2> ref_hi = {2 * s.interior_ihi[0] + 1,
+                                                 2 * s.interior_ihi[1] + 1};
               for (int fi = 0; fi < fine_ncomps; ++fi) {
                 const auto &fs = slabs[fine_comp0 + fi];
-                if (fs.ihi[0] >= ref_lo[0] && fs.ilo[0] <= ref_hi[0] &&
-                    fs.ihi[1] >= ref_lo[1] && fs.ilo[1] <= ref_hi[1])
+                if (fs.interior_ihi[0] >= ref_lo[0] &&
+                    fs.interior_ilo[0] <= ref_hi[0] &&
+                    fs.interior_ihi[1] >= ref_lo[1] &&
+                    fs.interior_ilo[1] <= ref_hi[1])
                   segment_data[idx].push_back(fine_comp0 + fi);
               }
             }

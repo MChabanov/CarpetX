@@ -2123,6 +2123,13 @@ void carpetx_openpmd_t::OutputOpenPMDPlanes(
     write_iter.setTimeUnitSI(Unit::time);
 
     if (myproc == ioproc) {
+      {
+        char *const data = IOUtil_GetAllParameters(cctkGH, 1 /*all*/);
+        const std::string parameters(data);
+        std::free(data);
+        write_iter.setAttribute("AllParameters", parameters);
+      }
+
       const int npatches = ghext->patchdata.size();
       write_iter.setAttribute<std::int64_t>("numDims", 2);
       write_iter.setAttribute<std::int64_t>("numPatches", npatches);
@@ -2175,7 +2182,7 @@ void carpetx_openpmd_t::OutputOpenPMDPlanes(
                   double(x0[plane.normal_axis]) +
                   double(eb + 1) * double(dx[plane.normal_axis]);
               if (double(plane.elevation) < w_lo ||
-                  double(plane.elevation) > w_hi)
+                  double(plane.elevation) >= w_hi)
                 continue;
               chunk_infos.push_back(box.smallEnd(axis_b));
               chunk_infos.push_back(box.smallEnd(axis_a));
