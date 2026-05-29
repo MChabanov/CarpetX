@@ -22,15 +22,23 @@ AMR-aware (per-level snap), Cartesian patches only.
   shared_ptr aliasing. Cell-centring encoded via `setPosition` per
   axis (no per-group-mesh dichotomy needed). Interior-only data,
   matching the existing 3D openPMD convention.
-- **Commit 5 (this commit)**: Silo plane writer now emits a full
-  AMR `DBmrgtree` alongside the multimesh (levelmaps + childmaps,
-  `lvlRatios` / `ijkExts` / `xyzExts` / `rank` mrgvars, plus
-  `DBOPT_EXTENTS` / `DBOPT_ZONECOUNTS` / `DBOPT_MRGTREE_NAME` on
-  the multimesh). VisIt now shadows coarse-level data with finer
-  levels where they overlap, instead of overlaying all levels.
-  Slab enumeration is level-major to match the 3D writer's ordering
-  convention; child relationships use 2D in-plane box refine-by-2
-  and overlap test.
+- **Commit 5**: Silo plane writer now emits a full AMR `DBmrgtree`
+  alongside the multimesh (levelmaps + childmaps, `lvlRatios` /
+  `ijkExts` / `xyzExts` / `rank` mrgvars, plus `DBOPT_EXTENTS` /
+  `DBOPT_ZONECOUNTS` / `DBOPT_MRGTREE_NAME` on the multimesh). VisIt
+  now shadows coarse-level data with finer levels where they
+  overlap, instead of overlaying all levels. Slab enumeration is
+  level-major to match the 3D writer's ordering convention; child
+  relationships use 2D in-plane box refine-by-2 and overlap test.
+- **Commit 6 (this commit)**: openPMD plane writer now writes
+  per-iteration AMR-hierarchy attributes mirroring the 3D openPMD
+  writer: `numDims` / `numPatches` / `patchSuffixes`, per-patch
+  `numLevels` / `levelSuffixes`, per-(patch, level) `chunkInfo`
+  (2D bounds of intersecting FABs, reversed for openPMD C order) and
+  `iteration_num` / `iteration_den`. Plus plane-specific attributes
+  `planeTag`, `planeNormalAxis`, `planeElevation` so readers can
+  identify each plane slab. Intersection is computed in world
+  coordinates (indextype-agnostic).
 
 ## Parameters
 
@@ -93,6 +101,14 @@ mesh extent is the level's vertex grid along the two in-plane axes.
 Data is interior-only (ghosts stripped), matching the existing 3D
 openPMD output convention; Silo plane data includes ghost cells with
 `DBOPT_LO_OFFSET` / `HI_OFFSET` markers, matching its 3D counterpart.
+
+Each openPMD iteration also carries AMR-hierarchy attributes
+(`numPatches`, `patchSuffixes`, per-patch `numLevels<suffix>` and
+`levelSuffixes<suffix>`, per-(patch, level) `chunkInfo<suffix>` /
+`iteration_num<suffix>` / `iteration_den<suffix>`), plus
+plane-specific keys `planeTag`, `planeNormalAxis`, `planeElevation`.
+Downstream tools can reconstruct which FABs contributed to which
+slab without re-running the snap logic.
 
 ## File layout
 
