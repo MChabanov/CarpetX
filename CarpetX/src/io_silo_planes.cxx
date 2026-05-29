@@ -472,15 +472,36 @@ void OutputSiloPlanes(const cGH *const cctkGH,
         const plane_mesh_props_t mesh_props{
             {nghosts3[axis_a], nghosts3[axis_b]}, centering_tag};
 
+        const int nlevels = ghext->num_levels();
+        const int npatches = ghext->num_patches();
+
+        struct slab_t {
+          int patch, level, component, proc;
+          std::array<int, 2> ilo, ihi;
+          std::array<double, 2> xlo, xhi;
+          int zonecount;
+        };
+        std::vector<slab_t> slabs;
+        std::vector<int> comp0_level(nlevels, 0);
+        std::vector<int> ncomps_level(nlevels, 0);
+        std::vector<std::vector<int> > comp0_level_patch(
+            nlevels, std::vector<int>(npatches, 0));
+        std::vector<std::vector<int> > ncomps_level_patch(
+            nlevels, std::vector<int>(npatches, 0));
+
         std::vector<std::string> meshnames;
         std::vector<std::vector<std::string> > varnames_per_var(numvars);
 
-        for (const auto &patchdata : ghext->patchdata) {
-          if (!patchdata.is_cartesian)
-            continue;
-          for (const auto &leveldata : patchdata.leveldata) {
-            const amrex::Geometry &geom =
-                patchdata.amrcore->Geom(leveldata.level);
+        for (int level = 0; level < nlevels; ++level) {
+          comp0_level[level] = int(slabs.size());
+          for (int patch = 0; patch < npatches; ++patch) {
+            const auto &patchdata = ghext->patchdata.at(patch);
+            if (!patchdata.is_cartesian)
+              continue;
+            if (level >= int(patchdata.leveldata.size()))
+              continue;
+            const auto &leveldata = patchdata.leveldata.at(level);
+            const amrex::Geometry &geom = patchdata.amrcore->Geom(level);
             const int slice_idx = snap_to_grid_index(plane, geom, indextype);
             if (slice_idx < 0)
               continue;
@@ -491,43 +512,300 @@ void OutputSiloPlanes(const cGH *const cctkGH,
             const amrex::MultiFab &mfab = *gdata.mfab[tl];
             const amrex::DistributionMapping &dm = mfab.DistributionMap();
             const int ncomponents = dm.size();
+            comp0_level_patch[level][patch] = int(slabs.size());
+
+            const amrex::Real *const x0 = geom.ProbLo();
+            const amrex::Real *const dx = geom.CellSize();
+
             for (int c = 0; c < ncomponents; ++c) {
               const amrex::Box &fabbox = mfab.fabbox(c);
               if (slice_idx < fabbox.smallEnd(plane.normal_axis) ||
                   slice_idx > fabbox.bigEnd(plane.normal_axis))
                 continue;
 
-              const int proc = dm[c];
+              slab_t s;
+              s.patch = patch;
+              s.level = level;
+              s.component = c;
+              s.proc = dm[c];
+              s.ilo = {fabbox.smallEnd(axis_a), fabbox.smallEnd(axis_b)};
+              s.ihi = {fabbox.bigEnd(axis_a), fabbox.bigEnd(axis_b)};
+              s.xlo = {
+                  double(x0[axis_a] + fabbox.smallEnd(axis_a) * dx[axis_a]),
+                  double(x0[axis_b] + fabbox.smallEnd(axis_b) * dx[axis_b])};
+              s.xhi = {double(x0[axis_a] + fabbox.bigEnd(axis_a) * dx[axis_a]),
+                       double(x0[axis_b] + fabbox.bigEnd(axis_b) * dx[axis_b])};
+              const int len_a = fabbox.length(axis_a);
+              const int len_b = fabbox.length(axis_b);
+              s.zonecount = (len_a + int(cv_a)) * (len_b + int(cv_b));
+              slabs.push_back(s);
+
               const std::string proc_filename =
                   make_plane_subdirname(output_file, plane.tag,
                                         cctk_iteration) +
                   "/" +
                   make_plane_filename(output_file, plane.tag, cctk_iteration,
-                                      proc / ioproc_every);
-              const std::string meshname =
-                  proc_filename + ":" +
-                  make_plane_meshname(plane.tag, centering_tag,
-                                      mesh_props.nghosts, patchdata.patch,
-                                      leveldata.level, c);
-              meshnames.push_back(meshname);
-
-              for (int vi = 0; vi < numvars; ++vi) {
-                const std::string varname =
+                                      s.proc / ioproc_every);
+              meshnames.push_back(proc_filename + ":" +
+                                  make_plane_meshname(plane.tag, centering_tag,
+                                                      mesh_props.nghosts, patch,
+                                                      level, c));
+              for (int vi = 0; vi < numvars; ++vi)
+                varnames_per_var[vi].push_back(
                     proc_filename + ":" +
-                    make_plane_varname(gi, vi, plane.tag, patchdata.patch,
-                                       leveldata.level, c);
-                varnames_per_var[vi].push_back(varname);
-              }
+                    make_plane_varname(gi, vi, plane.tag, patch, level, c));
             }
+            ncomps_level_patch[level][patch] =
+                int(slabs.size()) - comp0_level_patch[level][patch];
           }
+          ncomps_level[level] = int(slabs.size()) - comp0_level[level];
         }
 
-        if (meshnames.empty())
+        if (slabs.empty())
           continue;
+        const int ncomps_total = int(slabs.size());
 
         if (!meta_have_meshes.count(mesh_props)) {
           const std::string multimeshname =
               make_plane_meshname(plane.tag, centering_tag, mesh_props.nghosts);
+          const std::string levelmaps_name =
+              multimeshname + "_wmrgtree_lvlMaps";
+          const std::string childmaps_name =
+              multimeshname + "_wmrgtree_chldMaps";
+
+          {
+            std::vector<int> segment_types(nlevels, DB_BLOCKCENT);
+            std::vector<std::vector<int> > segment_data(nlevels);
+            for (int l = 0; l < nlevels; ++l) {
+              segment_data[l].reserve(ncomps_level[l]);
+              for (int c = 0; c < ncomps_level[l]; ++c)
+                segment_data[l].push_back(comp0_level[l] + c);
+            }
+            std::vector<int> segment_lengths;
+            std::vector<const int *> segment_data_ptrs;
+            segment_lengths.reserve(nlevels);
+            segment_data_ptrs.reserve(nlevels);
+            for (const auto &d : segment_data) {
+              segment_lengths.push_back(int(d.size()));
+              segment_data_ptrs.push_back(d.data());
+            }
+            ierr = DBPutGroupelmap(
+                metafile.get(), levelmaps_name.c_str(), nlevels,
+                segment_types.data(), segment_lengths.data(), nullptr,
+                segment_data_ptrs.data(), nullptr, 0, nullptr);
+            assert(!ierr);
+          }
+
+          std::vector<int> num_children;
+          {
+            std::vector<int> segment_types(ncomps_total, DB_BLOCKCENT);
+            std::vector<std::vector<int> > segment_data(ncomps_total);
+            for (int idx = 0; idx < ncomps_total; ++idx) {
+              const auto &s = slabs[idx];
+              const int fine_level = s.level + 1;
+              if (fine_level >= nlevels)
+                continue;
+              const int fine_comp0 = comp0_level_patch[fine_level][s.patch];
+              const int fine_ncomps = ncomps_level_patch[fine_level][s.patch];
+              const std::array<int, 2> ref_lo = {2 * s.ilo[0], 2 * s.ilo[1]};
+              const std::array<int, 2> ref_hi = {2 * s.ihi[0] + 1,
+                                                 2 * s.ihi[1] + 1};
+              for (int fi = 0; fi < fine_ncomps; ++fi) {
+                const auto &fs = slabs[fine_comp0 + fi];
+                if (fs.ihi[0] >= ref_lo[0] && fs.ilo[0] <= ref_hi[0] &&
+                    fs.ihi[1] >= ref_lo[1] && fs.ilo[1] <= ref_hi[1])
+                  segment_data[idx].push_back(fine_comp0 + fi);
+              }
+            }
+            num_children.reserve(ncomps_total);
+            std::vector<const int *> segment_data_ptrs;
+            segment_data_ptrs.reserve(ncomps_total);
+            for (const auto &d : segment_data) {
+              num_children.push_back(int(d.size()));
+              segment_data_ptrs.push_back(d.data());
+            }
+            ierr = DBPutGroupelmap(
+                metafile.get(), childmaps_name.c_str(), ncomps_total,
+                segment_types.data(), num_children.data(), nullptr,
+                segment_data_ptrs.data(), nullptr, 0, nullptr);
+            assert(!ierr);
+          }
+
+          {
+            const int max_children = 2;
+            const DB::ptr<DBmrgtree> mrgtree =
+                DB::make(DBMakeMrgtree(DB_MULTIMESH, 0, max_children, nullptr));
+            assert(mrgtree);
+            ierr = DBAddRegion(mrgtree.get(), "amr_decomp", 0, max_children,
+                               nullptr, 0, nullptr, nullptr, nullptr, nullptr);
+            assert(!ierr);
+            ierr = DBSetCwr(mrgtree.get(), "amr_decomp");
+            assert(ierr >= 0);
+
+            {
+              ierr = DBAddRegion(mrgtree.get(), "levels", 0, nlevels, nullptr,
+                                 0, nullptr, nullptr, nullptr, nullptr);
+              assert(!ierr);
+              ierr = DBSetCwr(mrgtree.get(), "levels");
+              assert(ierr >= 0);
+              const std::vector<std::string> region_names{"@level%d@n"};
+              std::vector<const char *> region_name_ptrs;
+              region_name_ptrs.reserve(region_names.size());
+              for (const auto &n : region_names)
+                region_name_ptrs.push_back(n.c_str());
+              std::vector<int> segment_ids(nlevels);
+              std::vector<int> segment_types(nlevels, DB_BLOCKCENT);
+              for (int l = 0; l < nlevels; ++l)
+                segment_ids[l] = l;
+              ierr = DBAddRegionArray(
+                  mrgtree.get(), nlevels, region_name_ptrs.data(), 0,
+                  levelmaps_name.c_str(), 1, segment_ids.data(),
+                  ncomps_level.data(), segment_types.data(), nullptr);
+              assert(!ierr);
+              ierr = DBSetCwr(mrgtree.get(), "..");
+              assert(ierr >= 0);
+            }
+
+            {
+              ierr =
+                  DBAddRegion(mrgtree.get(), "patches", 0, ncomps_total,
+                              nullptr, 0, nullptr, nullptr, nullptr, nullptr);
+              assert(ierr >= 0);
+              ierr = DBSetCwr(mrgtree.get(), "patches");
+              assert(ierr >= 0);
+              const std::vector<std::string> region_names{"@patch%d@n"};
+              std::vector<const char *> region_name_ptrs;
+              region_name_ptrs.reserve(region_names.size());
+              for (const auto &n : region_names)
+                region_name_ptrs.push_back(n.c_str());
+              std::vector<int> segment_ids(ncomps_total);
+              std::vector<int> segment_types(ncomps_total, DB_BLOCKCENT);
+              for (int c = 0; c < ncomps_total; ++c)
+                segment_ids[c] = c;
+              ierr = DBAddRegionArray(
+                  mrgtree.get(), ncomps_total, region_name_ptrs.data(), 0,
+                  childmaps_name.c_str(), 1, segment_ids.data(),
+                  num_children.data(), segment_types.data(), nullptr);
+              ierr = DBSetCwr(mrgtree.get(), "..");
+              assert(ierr >= 0);
+            }
+
+            {
+              const std::vector<std::string> mrgv_onames{
+                  multimeshname + "_wmrgtree_lvlRatios",
+                  multimeshname + "_wmrgtree_ijkExts",
+                  multimeshname + "_wmrgtree_xyzExts", "rank"};
+              std::vector<const char *> mrgv_oname_ptrs;
+              mrgv_oname_ptrs.reserve(mrgv_onames.size() + 1);
+              for (const auto &n : mrgv_onames)
+                mrgv_oname_ptrs.push_back(n.c_str());
+              mrgv_oname_ptrs.push_back(nullptr);
+
+              const DB::ptr<DBoptlist> mt_optlist = DB::make(DBMakeOptlist(10));
+              assert(mt_optlist);
+              ierr = DBAddOption(mt_optlist.get(), DBOPT_MRGV_ONAMES,
+                                 mrgv_oname_ptrs.data());
+              assert(!ierr);
+              ierr = DBPutMrgtree(metafile.get(), "mrgTree", "amr_mesh",
+                                  mrgtree.get(), mt_optlist.get());
+              assert(!ierr);
+            }
+          }
+
+          {
+            const std::string levelrationame =
+                multimeshname + "_wmrgtree_lvlRatios";
+            const std::vector<std::string> compnames{"iRatio", "jRatio"};
+            std::vector<const char *> compname_ptrs;
+            compname_ptrs.reserve(compnames.size());
+            for (const auto &n : compnames)
+              compname_ptrs.push_back(n.c_str());
+            const std::vector<std::string> regionnames{"@level%d@n"};
+            std::vector<const char *> regionname_ptrs;
+            regionname_ptrs.reserve(regionnames.size());
+            for (const auto &n : regionnames)
+              regionname_ptrs.push_back(n.c_str());
+            std::array<std::vector<int>, 2> ratio_data;
+            for (int d = 0; d < 2; ++d)
+              ratio_data[d].push_back(2);
+            std::array<const void *, 2> ratio_data_ptrs;
+            for (int d = 0; d < 2; ++d)
+              ratio_data_ptrs[d] = ratio_data[d].data();
+            ierr = DBPutMrgvar(metafile.get(), levelrationame.c_str(),
+                               "mrgTree", 2, compname_ptrs.data(), nlevels,
+                               regionname_ptrs.data(), DB_INT,
+                               ratio_data_ptrs.data(), nullptr);
+            assert(!ierr);
+          }
+
+          {
+            const std::string iextentsname =
+                multimeshname + "_wmrgtree_ijkExts";
+            const std::string extentsname = multimeshname + "_wmrgtree_xyzExts";
+            const std::vector<std::string> icompnames{"iMin", "iMax", "jMin",
+                                                      "jMax"};
+            const char *a_name = (axis_a == 0)   ? "x"
+                                 : (axis_a == 1) ? "y"
+                                                 : "z";
+            const char *b_name = (axis_b == 0)   ? "x"
+                                 : (axis_b == 1) ? "y"
+                                                 : "z";
+            const std::vector<std::string> compnames{
+                std::string(a_name) + "Min", std::string(a_name) + "Max",
+                std::string(b_name) + "Min", std::string(b_name) + "Max"};
+            std::vector<const char *> icompname_ptrs;
+            std::vector<const char *> compname_ptrs;
+            icompname_ptrs.reserve(icompnames.size());
+            compname_ptrs.reserve(compnames.size());
+            for (const auto &n : icompnames)
+              icompname_ptrs.push_back(n.c_str());
+            for (const auto &n : compnames)
+              compname_ptrs.push_back(n.c_str());
+            const std::vector<std::string> regionnames{"@patch%d@n"};
+            std::vector<const char *> regionname_ptrs;
+            regionname_ptrs.reserve(regionnames.size());
+            for (const auto &n : regionnames)
+              regionname_ptrs.push_back(n.c_str());
+
+            std::array<std::array<std::vector<int>, 2>, 2> idata;
+            std::array<std::array<std::vector<CCTK_REAL>, 2>, 2> rdata;
+            for (int d = 0; d < 2; ++d)
+              for (int f = 0; f < 2; ++f) {
+                idata[d][f].reserve(ncomps_total);
+                rdata[d][f].reserve(ncomps_total);
+              }
+            for (const auto &s : slabs)
+              for (int d = 0; d < 2; ++d) {
+                idata[d][0].push_back(s.ilo[d]);
+                idata[d][1].push_back(s.ihi[d]);
+                rdata[d][0].push_back(s.xlo[d]);
+                rdata[d][1].push_back(s.xhi[d]);
+              }
+            std::array<std::array<const void *, 2>, 2> idata_ptrs;
+            std::array<std::array<const void *, 2>, 2> rdata_ptrs;
+            for (int d = 0; d < 2; ++d)
+              for (int f = 0; f < 2; ++f) {
+                idata_ptrs[d][f] = idata[d][f].data();
+                rdata_ptrs[d][f] = rdata[d][f].data();
+              }
+            ierr = DBPutMrgvar(metafile.get(), iextentsname.c_str(), "mrgTree",
+                               2 * 2, icompname_ptrs.data(), ncomps_total,
+                               regionname_ptrs.data(), DB_INT,
+                               idata_ptrs.data(), nullptr);
+            assert(!ierr);
+            ierr = DBPutMrgvar(metafile.get(), extentsname.c_str(), "mrgTree",
+                               2 * 2, compname_ptrs.data(), ncomps_total,
+                               regionname_ptrs.data(), db_datatype_v<CCTK_REAL>,
+                               rdata_ptrs.data(), nullptr);
+            assert(!ierr);
+            const std::vector<int> ranks(ncomps_total, 2);
+            const std::vector<const void *> rank_ptrs{ranks.data()};
+            ierr = DBPutMrgvar(metafile.get(), "rank", "mrgTree", 1, nullptr,
+                               ncomps_total, regionname_ptrs.data(), DB_INT,
+                               rank_ptrs.data(), nullptr);
+            assert(!ierr);
+          }
+
           std::vector<const char *> meshname_ptrs;
           meshname_ptrs.reserve(meshnames.size());
           for (const auto &s : meshnames)
@@ -543,6 +821,31 @@ void OutputSiloPlanes(const cGH *const cctkGH,
           assert(!ierr);
           int quadmesh = DB_QUADMESH;
           ierr = DBAddOption(optlist.get(), DBOPT_MB_BLOCK_TYPE, &quadmesh);
+          assert(!ierr);
+
+          int extents_size = 2 * 2;
+          typedef std::array<std::array<double, 2>, 2> dextent_t;
+          std::vector<dextent_t> dextents(ncomps_total);
+          for (int i = 0; i < ncomps_total; ++i)
+            for (int d = 0; d < 2; ++d) {
+              dextents[i][0][d] = slabs[i].xlo[d];
+              dextents[i][1][d] = slabs[i].xhi[d];
+            }
+          ierr = DBAddOption(optlist.get(), DBOPT_EXTENTS_SIZE, &extents_size);
+          assert(!ierr);
+          ierr = DBAddOption(optlist.get(), DBOPT_EXTENTS, dextents.data());
+          assert(!ierr);
+
+          std::vector<int> zonecounts(ncomps_total);
+          for (int i = 0; i < ncomps_total; ++i)
+            zonecounts[i] = slabs[i].zonecount;
+          ierr =
+              DBAddOption(optlist.get(), DBOPT_ZONECOUNTS, zonecounts.data());
+          assert(!ierr);
+
+          const std::string mrgtreename = "mrgTree";
+          ierr = DBAddOption(optlist.get(), DBOPT_MRGTREE_NAME,
+                             const_cast<char *>(mrgtreename.c_str()));
           assert(!ierr);
 
           ierr = DBPutMultimesh(metafile.get(), multimeshname.c_str(),
