@@ -580,6 +580,29 @@ int OutputGH(const cGH *restrict cctkGH) {
   }
 
   {
+    const int openpmd_every =
+        out_openpmd_every == -1 ? out_every : out_openpmd_every;
+    const int every = out_openpmd_planes_every == -1 ? openpmd_every
+                                                     : out_openpmd_planes_every;
+    if (every > 0 && cctk_iteration % every == 0 &&
+        strlen(out_openpmd_planes) != 0) {
+      const std::vector<bool> group_enabled =
+          find_groups("openPMD planes", out_openpmd_plane_vars);
+#ifdef HAVE_CAPABILITY_openPMD_api
+      const std::vector<plane_spec_t> planes =
+          parse_planes(out_openpmd_planes, out_planes_int_precision,
+                       out_planes_frac_precision);
+      const std::string simulation_name = get_simulation_name();
+      OutputOpenPMDPlanes(cctkGH, group_enabled, planes, out_dir,
+                          simulation_name);
+#else
+      CCTK_VERROR("openPMD is not enabled. The parameter "
+                  "CarpetX::out_openpmd_planes must be empty.");
+#endif
+    }
+  }
+
+  {
     const int every = out_plotfile_every == -1 ? out_every : out_plotfile_every;
     if (every > 0 && cctk_iteration % every == 0)
       OutputPlotfile(cctkGH);

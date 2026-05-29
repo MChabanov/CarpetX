@@ -50,6 +50,7 @@ static inline int omp_in_parallel() { return 0; }
 #include <mutex>
 #include <optional>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -166,8 +167,8 @@ struct Const {
 
 struct Unit {
   // We use c = G = 1, and M_solar as mass unit.
-  static constexpr CCTK_REAL velocity = Const::c;                       // m s⁻¹
-  static constexpr CCTK_REAL mass = Const::M_solar;                     // kg
+  static constexpr CCTK_REAL velocity = Const::c;   // m s⁻¹
+  static constexpr CCTK_REAL mass = Const::M_solar; // kg
   static constexpr CCTK_REAL length = Const::G * mass / pow2(Const::c); // m
   static constexpr CCTK_REAL time = length / velocity;                  // s
 };
@@ -432,6 +433,12 @@ struct carpetx_openpmd_t {
                      const std::string &output_dir,
                      const std::string &output_file,
                      TimeLevelMode tl_mode = TimeLevelMode::Current);
+
+  void OutputOpenPMDPlanes(const cGH *const cctkGH,
+                           const std::vector<bool> &output_group,
+                           const std::vector<plane_spec_t> &planes,
+                           const std::string &output_dir,
+                           const std::string &output_file);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -469,6 +476,17 @@ void OutputOpenPMD(const cGH *const cctkGH,
     carpetx_openpmd_t::self = std::make_optional<carpetx_openpmd_t>();
   carpetx_openpmd_t::self->OutputOpenPMD(cctkGH, output_group, output_dir,
                                          output_file, tl_mode);
+}
+
+void OutputOpenPMDPlanes(const cGH *const cctkGH,
+                         const std::vector<bool> &output_group,
+                         const std::vector<plane_spec_t> &planes,
+                         const std::string &output_dir,
+                         const std::string &output_file) {
+  if (!carpetx_openpmd_t::self)
+    carpetx_openpmd_t::self = std::make_optional<carpetx_openpmd_t>();
+  carpetx_openpmd_t::self->OutputOpenPMDPlanes(cctkGH, output_group, planes,
+                                               output_dir, output_file);
 }
 
 void ShutdownOpenPMD() { carpetx_openpmd_t::self.reset(); }
@@ -694,7 +712,7 @@ void carpetx_openpmd_t::InputOpenPMDGridStructure(cGH *cctkGH,
       }
       // else: old checkpoint without per-level iteration — leave as nullopt
     } // for level
-  } // for patch
+  }   // for patch
 }
 
 void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
@@ -826,7 +844,7 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
         }
 
       } // for record_component
-    } // for mesh
+    }   // for mesh
   }
 
   // Post-read tasks
@@ -1082,7 +1100,7 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
                 }
 
               } // for vi
-            } // for local_component
+            }   // for local_component
 
             // Mark read variables as valid
             for (int vi = 0; vi < numvars; ++vi)
@@ -1095,7 +1113,7 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
       } // for gi
 
     } // for leveldata
-  } // for patchdata
+  }   // for patchdata
 
   // Next read grid scalars and grid arrays
 
@@ -1780,13 +1798,13 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
                                                       count);
                 }
               } // for vi
-            } // for local_component
-          } // for tl
+            }   // for local_component
+          }     // for tl
         }
       } // for gi
 
     } // for leveldata
-  } // for patchdata
+  }   // for patchdata
 
   // Next write grid scalars and grid arrays
 
@@ -2036,6 +2054,247 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
 
   if (io_verbose)
     CCTK_VINFO("OutputOpenPMD done.");
+
+  if (io_verbose)
+    timer.print();
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+void carpetx_openpmd_t::OutputOpenPMDPlanes(
+    const cGH *const cctkGH, const std::vector<bool> &output_group,
+    const std::vector<plane_spec_t> &planes, const std::string &output_dir,
+    const std::string &output_file) {
+  DECLARE_CCTK_ARGUMENTS;
+  DECLARE_CCTK_PARAMETERS;
+
+  static Timer timer("OutputOpenPMDPlanes");
+  Interval interval(timer);
+
+  if (planes.empty())
+    return;
+  if (std::count(output_group.begin(), output_group.end(), true) == 0)
+    return;
+
+  const openPMD::Format format = get_format();
+
+  static std::set<int> warned_noncart_patches;
+  static std::set<std::string> warned_outside_domain;
+
+  {
+    const int mode = 0755;
+    static std::once_flag create_directory;
+    std::call_once(create_directory, [&]() {
+      const int ierr = CCTK_CreateDirectory(mode, output_dir.c_str());
+      assert(ierr >= 0);
+    });
+  }
+
+  const int myproc = CCTK_MyProc(cctkGH);
+  const int ioproc = 0;
+
+  for (const auto &plane : planes) {
+    const int axis_a = (plane.normal_axis == 0) ? 1 : 0;
+    const int axis_b = (plane.normal_axis == 2) ? 1 : 2;
+
+    std::ostringstream fnbuf;
+    fnbuf << output_dir << "/" << output_file << "." << plane.tag << ".it%08T"
+          << openPMD::suffix(format);
+    const std::string plane_filename = fnbuf.str();
+
+    openPMD::Series plane_series(plane_filename, openPMD::Access::CREATE,
+                                 MPI_COMM_WORLD, options);
+    plane_series.setIterationEncoding(iterationEncoding);
+    {
+      char const *const user = getenv("USER");
+      if (user)
+        plane_series.setAuthor(user);
+    }
+    {
+      char hostname[1000];
+      Util_GetHostName(hostname, sizeof hostname);
+      plane_series.setMachine(hostname);
+    }
+
+    openPMD::WriteIterations plane_write_iters = plane_series.writeIterations();
+    openPMD::Iteration write_iter = plane_write_iters[cctk_iteration];
+    write_iter.setTime(cctk_time);
+    write_iter.setDt(cctk_delta_time);
+    write_iter.setTimeUnitSI(Unit::time);
+
+    bool any_slab_emitted = false;
+
+    for (const auto &patchdata : ghext->patchdata) {
+      if (!patchdata.is_cartesian) {
+        if (warned_noncart_patches.insert(patchdata.patch).second)
+          CCTK_VWARN(CCTK_WARN_ALERT,
+                     "OutputOpenPMDPlanes: skipping non-Cartesian patch %d",
+                     patchdata.patch);
+        continue;
+      }
+
+      for (const auto &leveldata : patchdata.leveldata) {
+        const amrex::Geometry &geom = patchdata.amrcore->Geom(leveldata.level);
+        const amrex::Real *const xlo = geom.ProbLo();
+        const amrex::Real *const xhi = geom.ProbHi();
+        const amrex::Real *const dx = geom.CellSize();
+        const amrex::Box &dom = geom.Domain();
+        const amrex::IntVect &ilo3 = dom.smallEnd();
+        const amrex::IntVect &ihi3 = dom.bigEnd();
+
+        const std::array<int, 2> idom_lo = {ilo3[axis_a], ilo3[axis_b]};
+        const std::array<int, 2> idom_hi = {ihi3[axis_a] + 1 + 1,
+                                            ihi3[axis_b] + 1 + 1};
+        const std::array<int, 2> idom_shape = {idom_hi[0] - idom_lo[0],
+                                               idom_hi[1] - idom_lo[1]};
+
+        const std::array<double, 2> rdom_lo = {double(xlo[axis_a]),
+                                               double(xlo[axis_b])};
+        const std::array<double, 2> rdom_hi = {double(xhi[axis_a]),
+                                               double(xhi[axis_b])};
+
+        const openPMD::Extent extent = {std::uint64_t(idom_shape[1]),
+                                        std::uint64_t(idom_shape[0])};
+
+        for (int gi = 0; gi < CCTK_NumGroups(); ++gi) {
+          if (!output_group.at(gi))
+            continue;
+          if (CCTK_GroupTypeI(gi) != CCTK_GF)
+            continue;
+
+          const auto &groupdata = *leveldata.groupdata.at(gi);
+          if (groupdata.mfab.empty())
+            continue;
+          const int numvars = groupdata.numvars;
+          const int tl = 0;
+          const amrex::MultiFab &mfab = *groupdata.mfab[tl];
+          const amrex::IndexType &indextype = mfab.ixType();
+
+          const int slice_idx = snap_to_grid_index(plane, geom, indextype);
+          if (slice_idx < 0)
+            continue;
+
+          const bool cv_a = indextype.cellCentered(axis_a);
+          const bool cv_b = indextype.cellCentered(axis_b);
+
+          const std::string base_meshname =
+              make_meshname(gi, patchdata.patch, leveldata.level, tl);
+          const std::string meshname = plane.tag + "_" + base_meshname;
+          assert(!write_iter.meshes.contains(meshname));
+          openPMD::Mesh mesh = write_iter.meshes[meshname];
+
+          mesh.setGeometry(openPMD::Mesh::Geometry::cartesian);
+          const std::array<const char *, 3> axis_names = {"x", "y", "z"};
+          mesh.setAxisLabels(std::vector<std::string>{axis_names.at(axis_b),
+                                                      axis_names.at(axis_a)});
+          mesh.setGridSpacing(std::vector<double>{
+              (rdom_hi[1] - rdom_lo[1]) / double(idom_shape[1] - 1),
+              (rdom_hi[0] - rdom_lo[0]) / double(idom_shape[0] - 1)});
+          mesh.setGridGlobalOffset(std::vector<double>{rdom_lo[1], rdom_lo[0]});
+          mesh.setGridUnitSI(Unit::length);
+          mesh.setTimeOffset(CCTK_REAL(0));
+
+          const std::vector<double> position = {cv_b ? 0.5 : 0.0,
+                                                cv_a ? 0.5 : 0.0};
+
+          const openPMD::Datatype datatype =
+              openPMD::determineDatatype<CCTK_REAL>();
+          const openPMD::Dataset dataset(datatype, extent);
+
+          std::vector<openPMD::MeshRecordComponent> record_components;
+          record_components.reserve(numvars);
+          for (int vi = 0; vi < numvars; ++vi) {
+            const std::string componentname = make_componentname(gi, vi);
+            record_components.push_back(mesh[componentname]);
+            auto &rc = record_components.back();
+            rc.setPosition(position);
+            rc.resetDataset(dataset);
+          }
+
+          const int num_local_components = mfab.local_size();
+          for (int local_component = 0; local_component < num_local_components;
+               ++local_component) {
+            const int component = mfab.IndexArray().at(local_component);
+            const amrex::Box &validbox = mfab.box(component); // interior
+
+            if (slice_idx < validbox.smallEnd(plane.normal_axis) ||
+                slice_idx > validbox.bigEnd(plane.normal_axis))
+              continue;
+
+            any_slab_emitted = true;
+
+            const amrex::FArrayBox &fab = mfab[component];
+            const amrex::Box &fabbox = fab.box();
+            std::vector<CCTK_REAL> full_slab;
+            extract_slab(fab, plane.normal_axis, slice_idx, numvars, full_slab);
+
+            const int na_full = fabbox.length(axis_a);
+            const int nb_full = fabbox.length(axis_b);
+            const int na_valid = validbox.length(axis_a);
+            const int nb_valid = validbox.length(axis_b);
+            const int offset_a =
+                validbox.smallEnd(axis_a) - fabbox.smallEnd(axis_a);
+            const int offset_b =
+                validbox.smallEnd(axis_b) - fabbox.smallEnd(axis_b);
+            const std::ptrdiff_t np_valid = std::ptrdiff_t(na_valid) * nb_valid;
+
+            std::shared_ptr<CCTK_REAL> chunk_ptr(
+                new CCTK_REAL[std::size_t(numvars) * np_valid],
+                std::default_delete<CCTK_REAL[]>());
+            for (int vi = 0; vi < numvars; ++vi) {
+              for (int j = 0; j < nb_valid; ++j)
+                for (int i = 0; i < na_valid; ++i)
+                  chunk_ptr.get()[std::size_t(vi) * np_valid +
+                                  std::size_t(j) * na_valid + i] =
+                      full_slab[std::size_t(vi) * std::size_t(na_full) *
+                                    nb_full +
+                                std::size_t(j + offset_b) * na_full +
+                                std::size_t(i + offset_a)];
+            }
+
+            assert(validbox.smallEnd(axis_a) >= idom_lo[0]);
+            assert(validbox.smallEnd(axis_b) >= idom_lo[1]);
+            const openPMD::Offset start = {
+                std::uint64_t(validbox.smallEnd(axis_b) - idom_lo[1]),
+                std::uint64_t(validbox.smallEnd(axis_a) - idom_lo[0])};
+            const openPMD::Extent count = {std::uint64_t(nb_valid),
+                                           std::uint64_t(na_valid)};
+            assert(start[0] + count[0] <= extent[0]);
+            assert(start[1] + count[1] <= extent[1]);
+
+            for (int vi = 0; vi < numvars; ++vi) {
+              std::shared_ptr<CCTK_REAL> vi_ptr(chunk_ptr, chunk_ptr.get() +
+                                                               vi * np_valid);
+              record_components.at(vi).storeChunk(vi_ptr, start, count);
+            }
+          }
+        }
+      }
+    }
+
+    if (!any_slab_emitted) {
+      if (warned_outside_domain.insert(plane.tag).second)
+        CCTK_VWARN(CCTK_WARN_ALERT,
+                   "OutputOpenPMDPlanes: plane %s lies outside all "
+                   "Cartesian (patch, level) extents on this iteration",
+                   plane.tag.c_str());
+    }
+
+    plane_series.flush();
+    write_iter.close();
+
+    if (myproc == ioproc) {
+      std::ostringstream buf;
+      buf << output_dir << "/" << output_file << "." << plane.tag
+          << ".openpmd.visit";
+      const std::string visitname = buf.str();
+      std::ofstream visit(visitname, std::ios::app);
+      assert(visit.good());
+      visit << output_file << "." << plane.tag << ".it" << setw(8)
+            << setfill('0') << cctk_iteration << openPMD::suffix(format)
+            << "\n";
+    }
+  }
 
   if (io_verbose)
     timer.print();
