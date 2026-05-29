@@ -2122,6 +2122,76 @@ void carpetx_openpmd_t::OutputOpenPMDPlanes(
     write_iter.setDt(cctk_delta_time);
     write_iter.setTimeUnitSI(Unit::time);
 
+    if (myproc == ioproc) {
+      const int npatches = ghext->patchdata.size();
+      write_iter.setAttribute<std::int64_t>("numDims", 2);
+      write_iter.setAttribute<std::int64_t>("numPatches", npatches);
+      write_iter.setAttribute("planeTag", plane.tag);
+      write_iter.setAttribute<std::int64_t>("planeNormalAxis",
+                                            plane.normal_axis);
+      write_iter.setAttribute<double>("planeElevation",
+                                      double(plane.elevation));
+
+      std::vector<std::string> patch_suffixes(npatches);
+      for (int p = 0; p < npatches; ++p) {
+        std::ostringstream buf;
+        buf << "_patch" << setw(2) << setfill('0') << p;
+        patch_suffixes[p] = buf.str();
+      }
+      write_iter.setAttribute("patchSuffixes", patch_suffixes);
+
+      for (const auto &patchdata : ghext->patchdata) {
+        const int p = patchdata.patch;
+        const int nlevels = patchdata.leveldata.size();
+        write_iter.setAttribute<std::int64_t>("numLevels" + patch_suffixes[p],
+                                              nlevels);
+
+        std::vector<std::string> level_suffixes(nlevels);
+        for (int l = 0; l < nlevels; ++l) {
+          std::ostringstream buf;
+          buf << patch_suffixes[p] << "_lev" << setw(2) << setfill('0') << l;
+          level_suffixes[l] = buf.str();
+        }
+        write_iter.setAttribute("levelSuffixes" + patch_suffixes[p],
+                                level_suffixes);
+
+        for (const auto &leveldata : patchdata.leveldata) {
+          const int l = leveldata.level;
+          const amrex::Geometry &geom = patchdata.amrcore->Geom(l);
+          const amrex::Real *const x0 = geom.ProbLo();
+          const amrex::Real *const dx = geom.CellSize();
+
+          std::vector<std::int64_t> chunk_infos;
+          if (patchdata.is_cartesian) {
+            const amrex::FabArrayBase &mfab = *leveldata.fab;
+            const int nchunks = mfab.size();
+            for (int c = 0; c < nchunks; ++c) {
+              const amrex::Box &box = mfab.box(c);
+              const int sb = box.smallEnd(plane.normal_axis);
+              const int eb = box.bigEnd(plane.normal_axis);
+              const double w_lo = double(x0[plane.normal_axis]) +
+                                  double(sb) * double(dx[plane.normal_axis]);
+              const double w_hi =
+                  double(x0[plane.normal_axis]) +
+                  double(eb + 1) * double(dx[plane.normal_axis]);
+              if (double(plane.elevation) < w_lo ||
+                  double(plane.elevation) > w_hi)
+                continue;
+              chunk_infos.push_back(box.smallEnd(axis_b));
+              chunk_infos.push_back(box.smallEnd(axis_a));
+              chunk_infos.push_back(box.bigEnd(axis_b) + 1);
+              chunk_infos.push_back(box.bigEnd(axis_a) + 1);
+            }
+          }
+          write_iter.setAttribute("chunkInfo" + level_suffixes[l], chunk_infos);
+          write_iter.setAttribute("iteration_num" + level_suffixes[l],
+                                  std::int64_t(leveldata.iteration.num));
+          write_iter.setAttribute("iteration_den" + level_suffixes[l],
+                                  std::int64_t(leveldata.iteration.den));
+        }
+      }
+    }
+
     bool any_slab_emitted = false;
 
     for (const auto &patchdata : ghext->patchdata) {
