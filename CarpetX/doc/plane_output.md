@@ -16,13 +16,21 @@ AMR-aware (per-level snap), Cartesian patches only.
   extended with an in-plane centering tag so per-group meshes don't
   collide with the shared mesh. Avoids the `assert(0)` at
   `io_silo.cxx:1118`.
-- **Commit 4 (this commit)**: openPMD writer
-  (`OutputOpenPMDPlanes`). Per-plane local `openPMD::Series`
-  (file-per-plane via the `it%08T` template), per-(group, patch,
-  level) 2D mesh, per-component `storeChunk` with shared_ptr
-  aliasing. Cell-centring encoded via `setPosition` per axis (no
-  per-group-mesh dichotomy needed). Interior-only data, matching
-  the existing 3D openPMD convention.
+- **Commit 4**: openPMD writer (`OutputOpenPMDPlanes`). Per-plane
+  local `openPMD::Series` (file-per-plane via the `it%08T` template),
+  per-(group, patch, level) 2D mesh, per-component `storeChunk` with
+  shared_ptr aliasing. Cell-centring encoded via `setPosition` per
+  axis (no per-group-mesh dichotomy needed). Interior-only data,
+  matching the existing 3D openPMD convention.
+- **Commit 5 (this commit)**: Silo plane writer now emits a full
+  AMR `DBmrgtree` alongside the multimesh (levelmaps + childmaps,
+  `lvlRatios` / `ijkExts` / `xyzExts` / `rank` mrgvars, plus
+  `DBOPT_EXTENTS` / `DBOPT_ZONECOUNTS` / `DBOPT_MRGTREE_NAME` on
+  the multimesh). VisIt now shadows coarse-level data with finer
+  levels where they overlap, instead of overlaying all levels.
+  Slab enumeration is level-major to match the 3D writer's ordering
+  convention; child relationships use 2D in-plane box refine-by-2
+  and overlap test.
 
 ## Parameters
 
@@ -74,8 +82,10 @@ openPMD:
 ```
 
 Silo metafile holds `DBPutMultimesh` / `DBPutMultivar` references to
-all per-block 2D quadmeshes/quadvars. (Full AMR `DBmrgtree` deferred —
-data still displays in VisIt, but level shadowing is manual.)
+all per-block 2D quadmeshes/quadvars, plus a `DBmrgtree` with
+`amr_decomp/levels/patches` regions and `lvlRatios` / `ijkExts` /
+`xyzExts` / `rank` mrgvars. VisIt uses the mrgtree to shadow
+coarse-level data with finer levels where they overlap.
 
 openPMD output uses MPI-collective `storeChunk`; cell-centring is
 encoded per-component via `setPosition({0.5, 0.5})` (etc.) and the
