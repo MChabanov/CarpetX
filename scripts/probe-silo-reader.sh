@@ -48,7 +48,7 @@ echo "########## (3) Silo CLI tools ##########"
 for t in browser silex silodiff silofile silock silo2silo; do
   echo "  $t: $(command -v "$t" 2>/dev/null || echo none)"
 done
-ls /usr/local/bin 2>/dev/null | grep -i silo | sed 's/^/  local/bin: /'
+ls /usr/local/bin 2>/dev/null | grep -i silo | sed 's,^,  bin: ,'
 
 echo "########## (4) HDF5 layout via h5py ##########"
 python3 "$TESTDIR/verify_planes.py" \

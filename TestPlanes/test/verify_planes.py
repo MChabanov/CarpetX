@@ -530,18 +530,45 @@ def inspect_silo(out_dir, sim):
     if sample:
         try:
             import Silo
-            print("--- Silo module present ---")
+            print("--- Silo module: API exploration ---")
             db = Silo.Open(sample[0], Silo.DB_READ)
+            print("  dir(db): %s" % [a for a in dir(db) if not a.startswith("_")])
             toc = db.GetToc()
-            for attr in ("qmesh_names", "qvar_names", "multimesh_names",
-                         "multivar_names", "var_names", "dir_names"):
-                if hasattr(toc, attr):
-                    print("  toc.%s = %r" % (attr, getattr(toc, attr)))
-            qvn = getattr(toc, "qvar_names", [])
-            if qvn:
-                qv = db.GetQuadvar(qvn[0])
-                print("  GetQuadvar(%r) attrs: %s" % (
-                    qvn[0], [a for a in dir(qv) if not a.startswith("__")]))
+            print("  dir(toc): %s"
+                  % [a for a in dir(toc) if not a.startswith("_")])
+            qvn = list(getattr(toc, "qvar_names", []) or [])
+            qmn = list(getattr(toc, "qmesh_names", []) or [])
+            print("  qvar[0]  = %r" % (qvn[0] if qvn else None))
+            print("  qmesh[0] = %r" % (qmn[0] if qmn else None))
+
+            def _probe(method, name, label):
+                if not hasattr(db, method) or name is None:
+                    return
+                try:
+                    r = getattr(db, method)(name)
+                except Exception as e:  # noqa: BLE001
+                    print("  db.%s(%s) FAILED: %s" % (method, label, e))
+                    return
+                print("  db.%s(%s) -> %s" % (method, label, type(r).__name__))
+                if isinstance(r, dict):
+                    for k, v in r.items():
+                        import numpy as np
+                        try:
+                            a = np.asarray(v)
+                            sv = (a.shape if a.size > 12
+                                  else a.ravel().tolist())
+                        except Exception:  # noqa: BLE001
+                            sv = repr(v)[:80]
+                        print("       [%r] %s -> %s" % (k, type(v).__name__, sv))
+                else:
+                    attrs = [a for a in dir(r) if not a.startswith("_")]
+                    print("       attrs: %s" % attrs[:40])
+                    print("       repr: %s" % (repr(r)[:300]))
+
+            for m in ("GetVar", "GetObject", "GetQuadvar", "GetQuadmesh"):
+                _probe(m, qvn[0] if qvn else None, "qvar")
+            for m in ("GetVar", "GetObject", "GetQuadmesh"):
+                _probe(m, qmn[0] if qmn else None, "qmesh")
             db.Close()
         except Exception as exc:  # noqa: BLE001
             print("Silo module not usable (expected in CI): %s" % exc)
