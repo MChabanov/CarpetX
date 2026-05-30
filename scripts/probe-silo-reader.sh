@@ -90,5 +90,11 @@ with h5py.File(files[0], "r") as h:
 db.Close()
 PY
 
+echo "########## (6) numeric Silo read test (--silo-mode verify) ##########"
+python3 "$TESTDIR/verify_planes.py" \
+  --parfile "$TESTDIR/planes-single-level.par" \
+  --out-dir "$W/planes-single-level" \
+  --silo-mode verify 2>&1 | tail -30
+
 echo "########## done ##########"
 rm -rf "$W"

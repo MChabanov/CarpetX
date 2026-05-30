@@ -436,24 +436,30 @@ def _read_silo_module(out_dir, sim, geom):
                             int(_silo_scalar(minfo["max_index2"])))
                     ca, cb, lo_a, hi_a, lo_b, hi_b = mesh_cache[meshid]
 
-                    # The HDF5 value array is indexed [axis_b][axis_a] (axis_a
-                    # is the fast/last index), which is exactly the Slab.values
-                    # [b][a] convention -- no transpose needed.
-                    vals = h5read(value_path)
-
+                    # The value buffer is stored axis_a-fastest with stride
+                    # na = (node or zone count along axis_a); h5py's reported 2D
+                    # shape does NOT match that stride for non-square arrays, so
+                    # ravel and reshape to (nb, na) ourselves. Then
+                    # grid[j][i] == f(coord_a[i], coord_b[j]) -- the Slab.values
+                    # [b][a] convention.
+                    flat = np.asarray(h5[value_path][()]).reshape(-1)
                     if silo_cent == DB_ZONECENT_:
+                        na, nb = len(ca) - 1, len(cb) - 1
+                        grid = flat.reshape(nb, na)
                         # values at zone centres = midpoints of node coords;
                         # interior zones lie between interior nodes [lo, hi-1].
                         coords_a = [(ca[i] + ca[i + 1]) / 2
                                     for i in range(lo_a, hi_a)]
                         coords_b = [(cb[j] + cb[j + 1]) / 2
                                     for j in range(lo_b, hi_b)]
-                        sub = vals[lo_b:hi_b, lo_a:hi_a]
+                        sub = grid[lo_b:hi_b, lo_a:hi_a]
                     else:
+                        na, nb = len(ca), len(cb)
+                        grid = flat.reshape(nb, na)
                         # values at nodes; interior nodes [lo, hi].
                         coords_a = list(ca[lo_a:hi_a + 1])
                         coords_b = list(cb[lo_b:hi_b + 1])
-                        sub = vals[lo_b:hi_b + 1, lo_a:hi_a + 1]
+                        sub = grid[lo_b:hi_b + 1, lo_a:hi_a + 1]
 
                     slabs.append(Slab("silo", qvname, centering, normal_axis,
                                       level, patch, axis_a, axis_b,
