@@ -360,27 +360,39 @@ def read_silo(out_dir, sim, geom):
     return records, "verify", "read via Silo Python module"
 
 
-def _silo_attr(obj, *names):
-    for n in names:
-        if hasattr(obj, n):
-            return getattr(obj, n)
-    raise AttributeError("none of %s on %r" % (names, type(obj)))
+def _silo_scalar(v):
+    """GetVarInfo returns each member as a length-1 list/tuple; unwrap it."""
+    if isinstance(v, (list, tuple)):
+        v = v[0] if v else None
+    if isinstance(v, bytes):
+        v = v.decode()
+    return v
 
 
 def _read_silo_module(out_dir, sim, geom):
-    """Read per-process Silo plane data files via the LLNL `Silo` module.
+    """Read per-process Silo plane data files for numeric verification.
 
-    Defensive about exact SWIG attribute names; any mismatch raises and the
-    caller falls back to the smoke check. Confirm the real API with
-    --silo-mode inspect.
+    Uses the Debian python3-silo binding (Close/GetToc/GetVar/GetVarInfo only):
+    GetVarInfo(name) returns the object's metadata as a dict, including the
+    HDF5 dataset paths of its components (value0 for a quadvar; coord0/coord1
+    for a collinear quadmesh) and the interior node range (min_index*/max_index*
+    = the ghost offsets). The actual arrays are then read with h5py.
+
+    Only the interior (non-ghost) cells are returned: Silo stores ghost cells
+    too, and at AMR coarse-fine boundaries those are prolongation-filled rather
+    than exactly analytic, so they are not checked against f.
     """
     import Silo
+    import h5py
     import numpy as np
+
+    DB_ZONECENT_ = 111
 
     records_by_tag = {}
     for path in silo_data_files(out_dir, sim):
-        base = os.path.basename(os.path.dirname(path))  # ...<tag>.it<N>.silo_planes.dir
-        m = re.match(r"^%s\.(.+)\.it(\d+)\.silo_planes\.dir$" % re.escape(sim), base)
+        base = os.path.basename(os.path.dirname(path))
+        m = re.match(r"^%s\.(.+)\.it(\d+)\.silo_planes\.dir$" % re.escape(sim),
+                     base)
         if not m:
             continue
         tag = m.group(1)
@@ -391,42 +403,59 @@ def _read_silo_module(out_dir, sim, geom):
         axis_a, axis_b = ([1, 2], [0, 2], [0, 1])[normal_axis]
 
         db = Silo.Open(path, Silo.DB_READ)
+        slabs = []
         try:
             toc = db.GetToc()
-            qvar_names = list(_silo_attr(toc, "qvar_names"))
-            slabs = []
-            for qvname in qvar_names:
-                qv = db.GetQuadvar(qvname)
-                centering = centering_from_varname(qvname)
-                if centering is None:
-                    continue
-                vals = np.asarray(_silo_attr(qv, "vals")[0], dtype=float)
-                dims = list(_silo_attr(qv, "dims"))           # [na, nb]
-                cent = int(_silo_attr(qv, "centering"))
-                meshname = _silo_attr(qv, "meshname", "meshid")
-                if isinstance(meshname, bytes):
-                    meshname = meshname.decode()
-                lev_m = re.search(r"\.rl(\d+)", qvname)
-                patch_m = re.search(r"\.m(\d+)", qvname)
-                level = int(lev_m.group(1)) if lev_m else 0
-                patch = int(patch_m.group(1)) if patch_m else 0
+            qvar_names = list(getattr(toc, "qvar_names", []) or [])
+            mesh_cache = {}
+            with h5py.File(path, "r") as h5:
+                def h5read(p):
+                    return np.asarray(h5[p][()], dtype=float)
 
-                qm = db.GetQuadmesh(meshname)
-                mcoords = _silo_attr(qm, "coords")
-                coord_a = np.asarray(mcoords[0], dtype=float)
-                coord_b = np.asarray(mcoords[1], dtype=float)
+                for qvname in qvar_names:
+                    centering = centering_from_varname(qvname)
+                    if centering is None:
+                        continue
+                    info = db.GetVarInfo(qvname)
+                    value_path = _silo_scalar(info["value0"])
+                    meshid = _silo_scalar(info["meshid"])
+                    silo_cent = int(_silo_scalar(info["centering"]))
+                    lev_m = re.search(r"_rl(\d+)", qvname)
+                    patch_m = re.search(r"_m(\d+)", qvname)
+                    level = int(lev_m.group(1)) if lev_m else 0
+                    patch = int(patch_m.group(1)) if patch_m else 0
 
-                na, nb = int(dims[0]), int(dims[1])
-                values = vals.reshape(nb, na)               # row-major, a fastest
-                if cent == DB_ZONECENT:
-                    coords_a = [(coord_a[i] + coord_a[i + 1]) / 2 for i in range(na)]
-                    coords_b = [(coord_b[j] + coord_b[j + 1]) / 2 for j in range(nb)]
-                else:
-                    coords_a = list(coord_a[:na])
-                    coords_b = list(coord_b[:nb])
-                slabs.append(Slab("silo", qvname, centering, normal_axis,
-                                  level, patch, axis_a, axis_b,
-                                  coords_a, coords_b, values))
+                    if meshid not in mesh_cache:
+                        minfo = db.GetVarInfo(meshid)
+                        mesh_cache[meshid] = (
+                            h5read(_silo_scalar(minfo["coord0"])),
+                            h5read(_silo_scalar(minfo["coord1"])),
+                            int(_silo_scalar(minfo["min_index1"])),
+                            int(_silo_scalar(minfo["max_index1"])),
+                            int(_silo_scalar(minfo["min_index2"])),
+                            int(_silo_scalar(minfo["max_index2"])))
+                    ca, cb, lo_a, hi_a, lo_b, hi_b = mesh_cache[meshid]
+
+                    vals = h5read(value_path)   # shape (na, nb), axis_a first
+
+                    if silo_cent == DB_ZONECENT_:
+                        # values at zone centres = midpoints of node coords;
+                        # interior zones lie between interior nodes [lo, hi-1].
+                        coords_a = [(ca[i] + ca[i + 1]) / 2
+                                    for i in range(lo_a, hi_a)]
+                        coords_b = [(cb[j] + cb[j + 1]) / 2
+                                    for j in range(lo_b, hi_b)]
+                        sub = vals[lo_a:hi_a, lo_b:hi_b]
+                    else:
+                        # values at nodes; interior nodes [lo, hi].
+                        coords_a = list(ca[lo_a:hi_a + 1])
+                        coords_b = list(cb[lo_b:hi_b + 1])
+                        sub = vals[lo_a:hi_a + 1, lo_b:hi_b + 1]
+
+                    # Slab.values is indexed [b][a]; sub is [a][b].
+                    slabs.append(Slab("silo", qvname, centering, normal_axis,
+                                      level, patch, axis_a, axis_b,
+                                      coords_a, coords_b, np.asarray(sub).T))
         finally:
             db.Close()
 

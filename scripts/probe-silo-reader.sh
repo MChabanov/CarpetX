@@ -54,7 +54,13 @@ echo "########## (4) HDF5 layout via h5py ##########"
 python3 "$TESTDIR/verify_planes.py" \
   --parfile "$TESTDIR/planes-single-level.par" \
   --out-dir "$W/planes-single-level" \
-  --silo-mode inspect 2>&1 | head -320
+  --silo-mode inspect 2>&1 | head -120
+
+echo "########## (5) numeric Silo read test (--silo-mode verify) ##########"
+python3 "$TESTDIR/verify_planes.py" \
+  --parfile "$TESTDIR/planes-single-level.par" \
+  --out-dir "$W/planes-single-level" \
+  --silo-mode verify 2>&1 | tail -40
 
 echo "########## done ##########"
 rm -rf "$W"
