@@ -182,9 +182,18 @@ since the writer uses the `DB_HDF5` driver). `verify_planes.py --silo-mode
 inspect` dumps the on-disk Silo layout and module API to ease finalizing the
 reader in a given container.
 
+Beyond the per-point value check, the verifier also checks **coarse-level
+coverage**: the union of interior in-plane points on level 0 must tile the
+whole domain plane. This catches data that is silently *missing* rather than
+wrong -- the typical multi-rank failure mode (a rank's slab dropped, or a
+gather mismatch). The grids are forced into several boxes (`max_grid_size=8`,
+`blocking_factor=2`), and the single-level and AMR cases run on **two ranks**,
+so the Silo `MPI_Send`/`MPI_Recv` gather, the multi-file metafile, and the
+openPMD per-rank collective `storeChunk` are all exercised.
+
 CI runs `scripts/test-planes.sh` after the build (see
-`.github/workflows/ci.yml`), which executes the parfiles (the AMR case on two
-ranks to exercise the MPI gather in the Silo writer) and runs the verifier.
+`.github/workflows/ci.yml`), which executes the parfiles (single-level and AMR
+on two ranks) and runs the verifier.
 The same script runs in the local container loop via `agent_scripts/test.sh`.
 To refresh golden files after an intentional change, run the script with
 `UPDATE_GOLDEN=1`.

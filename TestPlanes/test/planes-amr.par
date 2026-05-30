@@ -50,6 +50,13 @@ CarpetX::blocking_factor_x = 2
 CarpetX::blocking_factor_y = 2
 CarpetX::blocking_factor_z = 2
 
+# Small max_grid_size forces several boxes per level so that, run on >1 rank,
+# the Silo MPI gather and openPMD per-rank collective chunks are exercised on
+# every refinement level.
+CarpetX::max_grid_size_x = 8
+CarpetX::max_grid_size_y = 8
+CarpetX::max_grid_size_z = 8
+
 TestPlanes::refined_center_x = 4.0
 TestPlanes::refined_center_y = 8.0
 TestPlanes::refined_center_z = 6.0

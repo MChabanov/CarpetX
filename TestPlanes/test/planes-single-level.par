@@ -38,6 +38,17 @@ CarpetX::boundary_upper_z = "linear extrapolation"
 
 CarpetX::max_num_levels = 1
 
+# blocking_factor=2 keeps ncells (16,20,24) valid (the default 8 does not
+# divide 20); small max_grid_size forces the domain into several boxes so that,
+# run on >1 rank, the Silo MPI gather (MPI_Send/Recv) and multi-file metafile
+# and the openPMD per-rank collective chunks are all exercised.
+CarpetX::blocking_factor_x = 2
+CarpetX::blocking_factor_y = 2
+CarpetX::blocking_factor_z = 2
+CarpetX::max_grid_size_x = 8
+CarpetX::max_grid_size_y = 8
+CarpetX::max_grid_size_z = 8
+
 IO::out_dir = $parfile
 IO::out_every = 1
 IO::out_fileinfo = "axis labels"

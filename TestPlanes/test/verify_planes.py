@@ -501,10 +501,15 @@ def inspect_silo(out_dir, sim):
 # ---------------------------------------------------------------------------
 
 def verify_slabs(records, geom, rtol, atol, summary_lines):
-    """Check every value == f at its reconstructed coordinate. Returns
-    (n_checked, errors)."""
+    """Check every value == f at its reconstructed coordinate, and that the
+    coarse level is fully covered (catches data dropped by a rank on a
+    multi-process run). Returns (n_checked, errors)."""
     n_checked = 0
     errors = []
+    eps = 1e-9
+    # coverage[(tag, var)] -> set of distinct interior (a,b) coords on level 0
+    coverage = {}
+    cover_meta = {}
     for (tag, normal_axis, elevation, slabs) in records:
         rounded = round_elevation(elevation, geom.frac_precision)
         for s in slabs:
@@ -519,7 +524,6 @@ def verify_slabs(records, geom, rtol, atol, summary_lines):
             na = len(s.coords_a)
             vmin = math.inf
             vmax = -math.inf
-            vsum = 0.0
             local_errs = 0
             for j in range(nb):
                 for i in range(na):
@@ -540,7 +544,15 @@ def verify_slabs(records, geom, rtol, atol, summary_lines):
                     n_checked += 1
                     vmin = min(vmin, actual)
                     vmax = max(vmax, actual)
-                    vsum += actual
+                    # Coverage: record interior in-plane points on level 0.
+                    if s.level == 0:
+                        a, b = s.coords_a[i], s.coords_b[j]
+                        if (geom.xmin[s.axis_a] - eps <= a <= geom.xmax[s.axis_a] + eps
+                                and geom.xmin[s.axis_b] - eps <= b <= geom.xmax[s.axis_b] + eps):
+                            key = (tag, s.var)
+                            coverage.setdefault(key, set()).add(
+                                (round(a, 6), round(b, 6)))
+                            cover_meta[key] = (s.centering, s.axis_a, s.axis_b)
             summary_lines.append(
                 "%s %s patch%d L%d na=%d nb=%d ncoord=%.6f "
                 "amin=%.6f amax=%.6f bmin=%.6f bmax=%.6f "
@@ -548,6 +560,20 @@ def verify_slabs(records, geom, rtol, atol, summary_lines):
                 (tag, s.var, s.patch, s.level, na, nb, ncoord,
                  min(s.coords_a), max(s.coords_a),
                  min(s.coords_b), max(s.coords_b), vmin, vmax))
+
+    # Coarse-level completeness: the union of interior points must tile the
+    # whole domain plane. A missing rank's contribution shows up as a shortfall.
+    for key, pts in coverage.items():
+        tag, var = key
+        centering, axis_a, axis_b = cover_meta[key]
+        na_exp = geom.ncells[axis_a] + (0 if centering[axis_a] else 1)
+        nb_exp = geom.ncells[axis_b] + (0 if centering[axis_b] else 1)
+        expected = na_exp * nb_exp
+        if len(pts) != expected:
+            errors.append(
+                "%s %s L0 coverage: %d distinct interior points, expected %d "
+                "(missing/extra data -- e.g. a rank's slab dropped)" %
+                (tag, var, len(pts), expected))
     return n_checked, errors
 
 

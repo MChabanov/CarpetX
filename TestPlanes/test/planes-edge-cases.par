@@ -43,6 +43,12 @@ CarpetX::boundary_upper_z = "linear extrapolation"
 
 CarpetX::max_num_levels = 1
 
+# blocking_factor=2 keeps ncells (16,20,24) valid (the default 8 does not
+# divide 20).
+CarpetX::blocking_factor_x = 2
+CarpetX::blocking_factor_y = 2
+CarpetX::blocking_factor_z = 2
+
 IO::out_dir = $parfile
 IO::out_every = 1
 IO::out_fileinfo = "axis labels"

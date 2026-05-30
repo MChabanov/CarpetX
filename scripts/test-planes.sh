@@ -74,7 +74,11 @@ run_and_verify() {
     ${UPDATE_GOLDEN:+--update-golden}
 }
 
-run_and_verify planes-single-level 1
+# Run on >1 rank where it matters: the single-level and AMR cases exercise the
+# Silo MPI gather / multi-file metafile and the openPMD per-rank collective
+# chunks (the grids are forced into several boxes via max_grid_size). The
+# edge-case run only needs to exercise parsing/snapping, so it runs serially.
+run_and_verify planes-single-level 2
 run_and_verify planes-amr 2
 run_and_verify planes-edge-cases 1
 
