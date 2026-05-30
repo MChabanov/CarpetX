@@ -665,11 +665,15 @@ def verify_slabs(records, geom, rtol, atol):
                         local_errs += 1
                     n_checked += 1
                     # Coverage: record interior in-plane points on level 0.
+                    # Key on the centering, not s.var: Silo names each box's
+                    # quadvar separately (..._c<NNNN>), so the boxes of one grid
+                    # function must be aggregated (the centering identifies the
+                    # GF). openPMD already uses one var name per GF.
                     if s.level == 0:
                         a, b = s.coords_a[i], s.coords_b[j]
                         if (geom.xmin[s.axis_a] - eps <= a <= geom.xmax[s.axis_a] + eps
                                 and geom.xmin[s.axis_b] - eps <= b <= geom.xmax[s.axis_b] + eps):
-                            key = (tag, s.var)
+                            key = (tag, s.centering)
                             coverage.setdefault(key, set()).add(
                                 (round(a, 6), round(b, 6)))
                             cover_meta[key] = (s.centering, s.axis_a, s.axis_b)
@@ -677,16 +681,16 @@ def verify_slabs(records, geom, rtol, atol):
     # Coarse-level completeness: the union of interior points must tile the
     # whole domain plane. A missing rank's contribution shows up as a shortfall.
     for key, pts in coverage.items():
-        tag, var = key
-        centering, axis_a, axis_b = cover_meta[key]
+        tag, centering = key
+        _c, axis_a, axis_b = cover_meta[key]
         na_exp = geom.ncells[axis_a] + (0 if centering[axis_a] else 1)
         nb_exp = geom.ncells[axis_b] + (0 if centering[axis_b] else 1)
         expected = na_exp * nb_exp
         if len(pts) != expected:
             errors.append(
-                "%s %s L0 coverage: %d distinct interior points, expected %d "
-                "(missing/extra data -- e.g. a rank's slab dropped)" %
-                (tag, var, len(pts), expected))
+                "%s centering=%s L0 coverage: %d distinct interior points, "
+                "expected %d (missing/extra data -- e.g. a rank's slab dropped)"
+                % (tag, centering, len(pts), expected))
     return n_checked, errors
 
 
