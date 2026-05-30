@@ -187,13 +187,18 @@ value), so it is robust to differences in MPI decomposition or chunk layout
 between the machine that generated the reference and CI. A missing reference is
 a soft skip (the analytic check is the gate); a present one is enforced.
 
-openPMD is read via `openpmd_api` (pip-installable). Silo `.silo` files are
-read with the LLNL `Silo` Python module when available (cleanest API; e.g.
-conda-forge `silo-nompi`, and present in the ET container); otherwise the Silo
-path falls back to a structural smoke check (valid HDF5 + datasets present,
-since the writer uses the `DB_HDF5` driver). `verify_planes.py --silo-mode
-inspect` dumps the on-disk Silo layout and module API to ease finalizing the
-reader in a given container.
+Both writers' output is numerically verified. openPMD is read via `openpmd_api`
+(pip-installable). Silo `.silo` files (`DB_HDF5` driver) are read via the LLNL
+`Silo` Python module -- the `python3-silo` apt package, installed by
+`test-planes.sh`; it is not on PyPI. Its `DBfile` exposes only
+`GetToc`/`GetVar`/`GetVarInfo`, so `GetVarInfo(name)` supplies each object's
+HDF5 component dataset paths (`value0`; `coord0`/`coord1`) plus centering and
+the interior node range, and the arrays are read with `h5py`. Only the interior
+(non-ghost) cells are checked: Silo stores ghost cells, and at AMR coarse-fine
+boundaries those are prolongation-filled rather than exactly analytic. Where the
+Silo module is unavailable the path degrades to a structural smoke check (valid
+HDF5 + datasets present); `verify_planes.py --silo-mode inspect` dumps the
+on-disk layout/API.
 
 Beyond the per-point value check, the verifier also checks **coarse-level
 coverage**: the union of interior in-plane points on level 0 must tile the

@@ -55,10 +55,31 @@ ensure_py() {
 ensure_py openpmd_api openpmd-api && HAVE_OPENPMD=1 || HAVE_OPENPMD=0
 ensure_py h5py h5py || true
 
+# The Silo Python module is not on PyPI; it ships as the apt package
+# python3-silo (the verifier reads quadvar/quadmesh component paths via
+# GetVarInfo and the arrays via h5py).
+if ! python3 -c "import Silo" 2>/dev/null; then
+  echo "  installing python3-silo (apt) ..."
+  if command -v apt-get >/dev/null 2>&1; then
+    (apt-get update -qq && apt-get install -y python3-silo) 2>&1 | tail -2 || true
+  fi
+fi
+HAVE_SILO=0; python3 -c "import Silo" 2>/dev/null && HAVE_SILO=1
+
 if [ "$HAVE_OPENPMD" -ne 1 ]; then
   echo "✗ openpmd_api is required for rigorous plane verification but could" >&2
   echo "  not be imported or installed (see pip output above)." >&2
   exit 1
+fi
+
+# Enforce numeric Silo verification when the Silo module is available
+# (it is, via apt, in the CI container); otherwise fall back to the smoke
+# check so the suite still runs in environments without it.
+if [ "$HAVE_SILO" -eq 1 ]; then
+  SILO_ARGS="--silo-mode verify --require-silo"
+else
+  echo "  (python3-silo unavailable -- Silo will use the structural smoke check)"
+  SILO_ARGS="--silo-mode auto"
 fi
 
 mkdir -p "$WORKDIR"
@@ -78,12 +99,13 @@ run_and_verify() {
     "$EXE" "$par"
   fi
   echo "Verifying $par_base"
+  # shellcheck disable=SC2086  # SILO_ARGS is intentionally word-split
   python3 "$TESTDIR/verify_planes.py" \
     --parfile "$par" \
     --out-dir "$par_base" \
     --golden-dir "$GOLDEN" \
     --require-openpmd \
-    --silo-mode "${SILO_MODE:-auto}"
+    $SILO_ARGS
 }
 
 # Run on >1 rank where it matters: the single-level and AMR cases exercise the

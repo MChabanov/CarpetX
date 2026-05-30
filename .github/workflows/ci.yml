@@ -61,12 +61,3 @@ jobs:
         run: /bin/bash $GITHUB_WORKSPACE/scripts/test-planes.sh
         env:
           CACTUS_DIR: ${{github.workspace}}/../workspace/Cactus
-
-      # TEMPORARY diagnostic: decide how to numerically read Silo output.
-      # Remove this step once the Silo reader is wired into verify_planes.py.
-      - name: Probe Silo reader (diagnostic)
-        if: ${{matrix.accelerator == 'cpu' && matrix.real-precision == 'real64' && matrix.mode == 'optimize'}}
-        continue-on-error: true
-        run: /bin/bash $GITHUB_WORKSPACE/scripts/probe-silo-reader.sh
-        env:
-          CACTUS_DIR: ${{github.workspace}}/../workspace/Cactus
