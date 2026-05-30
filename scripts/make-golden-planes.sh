@@ -6,23 +6,25 @@
 # simulation and copies the produced plane files into the repo, ready to
 # `git add` and commit.
 #
+# By default every case runs as a single serial process (no srun/mpirun): the
+# verifier compares golden vs fresh data point-by-point, so the reference does
+# not need to match CI's MPI decomposition. This makes the script easy to run
+# on a login node.
+#
 # Usage (from anywhere; the script finds the repo via its own location):
 #
-#   EXE=/path/to/Cactus/exe/cactus_sim \
-#   MPIRUN="srun" \
-#   bash scripts/make-golden-planes.sh
+#   EXE=/path/to/Cactus/exe/cactus_sim bash scripts/make-golden-planes.sh
 #
 # Environment:
 #   EXE       Path to the cactus executable (REQUIRED unless CACTUS_DIR is set
 #             and the executable lives at $CACTUS_DIR/exe/cactus_sim).
 #   CACTUS_DIR  Cactus dir; EXE defaults to $CACTUS_DIR/exe/cactus_sim.
-#   MPIRUN    MPI launcher (default: mpirun). On Frontier use "srun" inside an
-#             allocation, or set MPIRUN="" to run every case on a single rank.
+#   MPIRUN    MPI launcher; empty by default (serial). Only used if NPROCS > 1,
+#             e.g. NPROCS=2 MPIRUN="srun" for a parallel run.
+#   NPROCS    Ranks to run each case on (default: 1).
 #   WORKDIR   Scratch run directory (default: a fresh mktemp dir).
 #
-# The reference is written to TestPlanes/test/golden/<parfile>/ for each
-# parfile. The rank counts match scripts/test-planes.sh so the golden file
-# layout matches what CI produces.
+# The reference is written to TestPlanes/test/golden/<parfile>/ for each parfile.
 
 set -eu
 
@@ -33,7 +35,8 @@ GOLDEN="$TESTDIR/golden"
 
 CACTUS_DIR="${CACTUS_DIR:-$CARPETX_REPO/../workspace/Cactus}"
 EXE="${EXE:-$CACTUS_DIR/exe/cactus_sim}"
-MPIRUN="${MPIRUN-mpirun}"
+MPIRUN="${MPIRUN-}"
+NPROCS="${NPROCS:-1}"
 WORKDIR="${WORKDIR:-$(mktemp -d)}"
 
 if [ ! -x "$EXE" ]; then
@@ -47,25 +50,23 @@ export OMPI_ALLOW_RUN_AS_ROOT=1
 export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
 
 echo "executable : $EXE"
-echo "launcher   : ${MPIRUN:-<serial>}"
+echo "ranks      : $NPROCS${MPIRUN:+ via $MPIRUN}"
 echo "workdir    : $WORKDIR"
 echo "golden dir : $GOLDEN"
 echo
 
 mkdir -p "$GOLDEN"
 
-# parfile : nprocs (match scripts/test-planes.sh)
 make_one() {
   par_base="$1"
-  nprocs="$2"
   par="$TESTDIR/$par_base.par"
   echo "================================================================"
-  echo "Generating golden for $par_base on $nprocs rank(s)"
+  echo "Generating golden for $par_base on $NPROCS rank(s)"
   rm -rf "${WORKDIR:?}/$par_base"
   (
     cd "$WORKDIR"
-    if [ -n "$MPIRUN" ] && [ "$nprocs" -gt 1 ]; then
-      "$MPIRUN" -n "$nprocs" "$EXE" "$par"
+    if [ -n "$MPIRUN" ] && [ "$NPROCS" -gt 1 ]; then
+      "$MPIRUN" -n "$NPROCS" "$EXE" "$par"
     else
       "$EXE" "$par"
     fi
@@ -83,9 +84,9 @@ make_one() {
   echo "  wrote $(find "$dest" -type f | wc -l) files to $dest"
 }
 
-make_one planes-single-level 2
-make_one planes-amr 2
-make_one planes-edge-cases 1
+make_one planes-single-level
+make_one planes-amr
+make_one planes-edge-cases
 
 echo "================================================================"
 echo "Done. Review the new files, then:"
