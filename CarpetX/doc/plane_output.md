@@ -174,10 +174,18 @@ reconstructed world coordinate. The two coordinate sources are deliberately
 independent: in-plane coordinates come from each file's own mesh metadata
 (catching wrong `gridSpacing`/offset/`position`/centering), while the
 normal-axis coordinate is obtained by independently replaying
-`snap_to_grid_index` from the parfile geometry (catching a wrong slice). A
-compact per-slab summary is also diffed against committed golden files
-(`TestPlanes/test/golden/`); a missing golden file is a soft skip (the analytic
-check is the gate), while a present one is enforced.
+`snap_to_grid_index` from the parfile geometry (catching a wrong slice).
+
+On top of the analytic check there is a golden-reference regression check.
+The golden reference is the committed *binary* plane output (`.bp5` + `.silo`)
+under `TestPlanes/test/golden/<parfile>/`, produced by
+`scripts/make-golden-planes.sh` on any machine that can run the executable
+(e.g. Frontier; no Python needed there). When that reference is present the
+verifier reads it back through the same readers and compares the data against
+the freshly produced output. The comparison is data-level (point coordinate ->
+value), so it is robust to differences in MPI decomposition or chunk layout
+between the machine that generated the reference and CI. A missing reference is
+a soft skip (the analytic check is the gate); a present one is enforced.
 
 openPMD is read via `openpmd_api` (pip-installable). Silo `.silo` files are
 read with the LLNL `Silo` Python module when available (cleanest API; e.g.
@@ -198,10 +206,10 @@ openPMD per-rank collective `storeChunk` are all exercised.
 
 CI runs `scripts/test-planes.sh` after the build (see
 `.github/workflows/ci.yml`), which executes the parfiles (single-level and AMR
-on two ranks) and runs the verifier.
-The same script runs in the local container loop via `agent_scripts/test.sh`.
-To refresh golden files after an intentional change, run the script with
-`UPDATE_GOLDEN=1`.
+on two ranks) and runs the verifier. The same script runs in the local
+container loop via `agent_scripts/test.sh`. To (re)generate the golden
+reference output after an intentional change, run `scripts/make-golden-planes.sh`
+on a machine that can run the executable and commit `TestPlanes/test/golden/`.
 
 ## Why Cartesian-only
 

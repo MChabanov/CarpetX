@@ -83,8 +83,7 @@ run_and_verify() {
     --out-dir "$par_base" \
     --golden-dir "$GOLDEN" \
     --require-openpmd \
-    --silo-mode "${SILO_MODE:-auto}" \
-    ${UPDATE_GOLDEN:+--update-golden}
+    --silo-mode "${SILO_MODE:-auto}"
 }
 
 # Run on >1 rank where it matters: the single-level and AMR cases exercise the
