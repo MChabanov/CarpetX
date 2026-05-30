@@ -53,3 +53,11 @@ jobs:
         # We cannot run on accelerators. Single precision output is not accurate enough. Debug builds run too slowly.
         if: ${{matrix.accelerator == 'cpu' && matrix.real-precision == 'real64' && matrix.mode == 'optimize'}}
         run: /bin/bash $GITHUB_WORKSPACE/scripts/test.sh
+
+      - name: Verify 2D plane output
+        # Same gating as the testsuite: plane values are checked analytically
+        # against the TestPlanes parfiles (Silo + openPMD).
+        if: ${{matrix.accelerator == 'cpu' && matrix.real-precision == 'real64' && matrix.mode == 'optimize'}}
+        run: /bin/bash $GITHUB_WORKSPACE/scripts/test-planes.sh
+        env:
+          CACTUS_DIR: ${{github.workspace}}/../workspace/Cactus

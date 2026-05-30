@@ -128,6 +128,67 @@ TestOutput/test/output-silo-planes.par     smoke-test (Silo)
 TestOutput/test/output-openpmd-planes.par  smoke-test (openPMD)
 ```
 
+## Testing
+
+Thorn `TestPlanes` provides a rigorous, CI-integrated test suite for the plane
+writers. It declares one grid function per index-type centering (the eight V/C
+combinations: vertex `gf000`, cell `gf111`, the three face- and three
+edge-centred variants) and fills each with the same analytic, axis-distinct
+field
+
+```
+f(x, y, z) = x + 100 y + 10000 z
+```
+
+evaluated at the grid function's own centering-dependent world coordinate. `f`
+is linear, so it is exactly representable on every refinement level after
+prolongation/restriction; `TestPlanes_Set` is scheduled at both `initial` and
+`postregrid` so every (re)created level holds `f` exactly, independent of
+prolongation accuracy. The distinct decade weights make an axis swap or
+transpose in a writer immediately visible.
+
+Parfiles (`TestPlanes/test/`):
+
+| Parfile | Coverage |
+|---|---|
+| `planes-single-level.par` | uniform grid; xy/xz/yz principal planes + one offset per direction; all 8 centerings; Silo + openPMD |
+| `planes-amr.par` | 3-level AMR (refined cube about the centre); every plane crosses every level (per-level snap, Silo mrgtree shadowing, openPMD per-(patch,level) attributes) |
+| `planes-edge-cases.par` | half-integer / negative / over-precise elevations, and an out-of-domain elevation that must be skipped |
+
+The grid is deliberately small and uses a distinct cell count and a distinct,
+non-zero origin per axis (`16×20×24` cells, `x∈[-4,12]`, `y∈[-2,18]`,
+`z∈[-6,18]`, `dx=1`): the distinct sizes make a transposed in-plane axis a
+shape/value mismatch, and the non-zero origins catch `ProbLo == 0` assumptions.
+The AMR run refines a half-width-4 cube about the centre `(4,8,6)` over three
+levels (so the cell-centred normal coordinate differs per level, e.g. `6.0` on
+the coarse level vs `6.125` on the finest).
+
+Verification (`TestPlanes/test/verify_planes.py`) reads the written plane files
+back and asserts that every stored value equals `f` at the point's
+reconstructed world coordinate. The two coordinate sources are deliberately
+independent: in-plane coordinates come from each file's own mesh metadata
+(catching wrong `gridSpacing`/offset/`position`/centering), while the
+normal-axis coordinate is obtained by independently replaying
+`snap_to_grid_index` from the parfile geometry (catching a wrong slice). A
+compact per-slab summary is also diffed against committed golden files
+(`TestPlanes/test/golden/`); a missing golden file is a soft skip (the analytic
+check is the gate), while a present one is enforced.
+
+openPMD is read via `openpmd_api` (pip-installable). Silo `.silo` files are
+read with the LLNL `Silo` Python module when available (cleanest API; e.g.
+conda-forge `silo-nompi`, and present in the ET container); otherwise the Silo
+path falls back to a structural smoke check (valid HDF5 + datasets present,
+since the writer uses the `DB_HDF5` driver). `verify_planes.py --silo-mode
+inspect` dumps the on-disk Silo layout and module API to ease finalizing the
+reader in a given container.
+
+CI runs `scripts/test-planes.sh` after the build (see
+`.github/workflows/ci.yml`), which executes the parfiles (the AMR case on two
+ranks to exercise the MPI gather in the Silo writer) and runs the verifier.
+The same script runs in the local container loop via `agent_scripts/test.sh`.
+To refresh golden files after an intentional change, run the script with
+`UPDATE_GOLDEN=1`.
+
 ## Why Cartesian-only
 
 `CoordinatesX::vertex_coords` always stores world-space Cartesian

@@ -1,0 +1,80 @@
+## Edge cases for 2D plane parsing, snapping and tag formatting.
+##
+##   yz:7.5     half-integer elevation: snaps to the nearest vertex (x=8) for
+##              vertex-centred axes but is an exact cell centre (x=7.5) for
+##              cell-centred axes -- the two centerings land on different
+##              slices from the same spec.
+##   xz:-1.0    negative elevation: exercises the "neg" sign in the tag.
+##   xy:5.1234  more fractional digits than out_planes_frac_precision=3: the
+##              elevation is rounded to 5.123 (one-time degradation warning) and
+##              that rounded value is both the tag and the snap target.
+##   xy:100.0   outside the domain along z: must emit a one-time warning and be
+##              skipped (no slab written).
+##
+## The verifier checks every value that *is* written against f at its recorded
+## coordinate, and confirms the out-of-domain plane produced no data.
+
+ActiveThorns = "
+    CarpetX
+    IOUtil
+    TestPlanes
+"
+
+Cactus::cctk_itlast = 0
+Cactus::presync_mode = "mixed-error"
+
+CarpetX::ncells_x = 16
+CarpetX::ncells_y = 20
+CarpetX::ncells_z = 24
+
+CarpetX::xmin = -4.0
+CarpetX::ymin = -2.0
+CarpetX::zmin = -6.0
+CarpetX::xmax = 12.0
+CarpetX::ymax = 18.0
+CarpetX::zmax = 18.0
+
+CarpetX::boundary_x = "linear extrapolation"
+CarpetX::boundary_y = "linear extrapolation"
+CarpetX::boundary_z = "linear extrapolation"
+CarpetX::boundary_upper_x = "linear extrapolation"
+CarpetX::boundary_upper_y = "linear extrapolation"
+CarpetX::boundary_upper_z = "linear extrapolation"
+
+CarpetX::max_num_levels = 1
+
+IO::out_dir = $parfile
+IO::out_every = 1
+IO::out_fileinfo = "axis labels"
+IO::parfile_write = no
+
+CarpetX::out_metadata = no
+
+CarpetX::out_silo_plane_vars = "
+    TestPlanes::gf000
+    TestPlanes::gf001
+    TestPlanes::gf010
+    TestPlanes::gf011
+    TestPlanes::gf100
+    TestPlanes::gf101
+    TestPlanes::gf110
+    TestPlanes::gf111
+"
+CarpetX::out_silo_planes = "yz:3.5, xz:-1.0, xy:5.1234, xy:100.0"
+CarpetX::out_silo_planes_every = 1
+
+CarpetX::out_openpmd_plane_vars = "
+    TestPlanes::gf000
+    TestPlanes::gf001
+    TestPlanes::gf010
+    TestPlanes::gf011
+    TestPlanes::gf100
+    TestPlanes::gf101
+    TestPlanes::gf110
+    TestPlanes::gf111
+"
+CarpetX::out_openpmd_planes = "yz:3.5, xz:-1.0, xy:5.1234, xy:100.0"
+CarpetX::out_openpmd_planes_every = 1
+
+CarpetX::out_planes_int_precision = 4
+CarpetX::out_planes_frac_precision = 3

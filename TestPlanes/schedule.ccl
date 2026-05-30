@@ -1,0 +1,38 @@
+# Schedule definitions for thorn TestPlanes
+
+STORAGE: gf000
+STORAGE: gf001
+STORAGE: gf010
+STORAGE: gf011
+STORAGE: gf100
+STORAGE: gf101
+STORAGE: gf110
+STORAGE: gf111
+
+SCHEDULE TestPlanes_SetError AT postinitial
+{
+  LANG: C
+  WRITES: CarpetXRegrid::regrid_error(interior)
+} "Flag the refined region"
+
+SCHEDULE TestPlanes_Set AT initial
+{
+  LANG: C
+  WRITES: gf000(everywhere), gf001(everywhere), gf010(everywhere),
+          gf011(everywhere), gf100(everywhere), gf101(everywhere),
+          gf110(everywhere), gf111(everywhere)
+} "Set up analytic test data f(x,y,z) = x + 100 y + 10000 z"
+
+# Re-apply the analytic field on every (re)created refinement level. During the
+# initial-data loop CarpetX re-runs CCTK_INITIAL on all active levels, so this
+# is redundant there, but a regrid during evolution fills new levels by
+# prolongation only. Because f is a static analytic field, setting it directly
+# at postregrid keeps every level exactly analytic regardless of how it was
+# created, so the plane output never depends on prolongation accuracy.
+SCHEDULE TestPlanes_Set AT postregrid
+{
+  LANG: C
+  WRITES: gf000(everywhere), gf001(everywhere), gf010(everywhere),
+          gf011(everywhere), gf100(everywhere), gf101(everywhere),
+          gf110(everywhere), gf111(everywhere)
+} "Re-apply analytic test data after regridding"

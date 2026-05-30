@@ -30,3 +30,18 @@ else
   echo "✗ test failed" >&2
   exit 1
 fi
+
+# Verify 2D plane output (Silo + openPMD) analytically.
+planelog=$(mktemp)
+trap 'rm -f "$log" "$planelog"' EXIT
+if docker exec \
+  -e CACTUS_DIR="$CONTAINERLOCALCACTUS" \
+  "$CONTAINERLOCAL" zsh -c '
+  /bin/bash "$CACTUS_DIR/repos/CarpetX/scripts/test-planes.sh"
+' > "$planelog" 2>&1; then
+  echo "✓ plane verification"
+else
+  cat "$planelog"
+  echo "✗ plane verification failed" >&2
+  exit 1
+fi
