@@ -69,8 +69,10 @@ Elevations are rounded to `frac_precision` digits at parse (warning
 fires once per unique spec on precision overflow). The rounded value
 is both the tag content and the snap target. Per level, snap to the
 nearest vertex (VC: `x0 + i·dx`) or cell center (CC: `x0 + (i+½)·dx`).
-Out-of-domain elevations and non-Cartesian patches produce a one-time
-warning and are skipped.
+A plane whose elevation lies outside every Cartesian (patch, level) along
+the normal axis produces a one-time warning and is skipped entirely: no
+output file (Silo or openPMD) is written for it. Non-Cartesian patches are
+likewise skipped.
 
 ## Output files
 

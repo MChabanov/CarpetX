@@ -229,6 +229,15 @@ def read_openpmd(out_dir, sim, geom):
 
     records = []
     for (tag, ext) in sorted(groups):
+        # The writer emits no file for an out-of-domain elevation; that is
+        # asserted separately by find_out_of_domain_files. Defensively, if such
+        # a file does exist, do not open it here -- its empty chunkInfo
+        # attributes would make openpmd-api throw at Series open -- so that the
+        # clean "writer produced a file" error is reported instead of a crash.
+        parsed = parse_plane_tag(tag)
+        if parsed is not None and not geom.in_domain(parsed[0], parsed[1]):
+            records.append((tag, parsed[0], parsed[1], []))
+            continue
         pattern = os.path.join(out_dir, "%s.%s.it%%08T.%s" % (sim, tag, ext))
         series = io.Series(pattern, io.Access.read_only)
         for it_index in series.iterations:
@@ -581,6 +590,33 @@ def verify_slabs(records, geom, rtol, atol, summary_lines):
 # Golden files
 # ---------------------------------------------------------------------------
 
+def find_out_of_domain_files(out_dir, sim, geom):
+    """The writers must emit no file for a plane whose elevation is out of
+    domain. Flag any plane output file (openPMD or Silo) whose tag decodes to
+    an out-of-domain elevation."""
+    errors = []
+    seen = set()
+    patterns = ["%s.*.it*.h5", "%s.*.it*.bp", "%s.*.it*.bp4", "%s.*.it*.bp5",
+                "%s.*.it*.silo"]
+    for pat in patterns:
+        for path in glob.glob(os.path.join(out_dir, pat % sim)):
+            base = os.path.basename(path)
+            m = re.match(r"^%s\.(.+)\.it(\d+)\.(\w+)$" % re.escape(sim), base)
+            if not m:
+                continue
+            tag = m.group(1)
+            if tag in seen:
+                continue
+            seen.add(tag)
+            parsed = parse_plane_tag(tag)
+            if parsed is not None and not geom.in_domain(parsed[0], parsed[1]):
+                errors.append(
+                    "writer produced an output file for out-of-domain plane "
+                    "'%s' (elevation %.6g on axis %d); expected no file"
+                    % (tag, parsed[1], parsed[0]))
+    return errors
+
+
 def golden_path(golden_dir, parfile, fmt):
     base = os.path.splitext(os.path.basename(parfile))[0]
     return os.path.join(golden_dir, "%s.%s.summary" % (base, fmt))
@@ -634,6 +670,13 @@ def main(argv=None):
     sim = os.path.splitext(os.path.basename(args.parfile))[0]
 
     all_errors = []
+
+    # --- Out-of-domain planes must produce no file at all ------------------
+    ood = find_out_of_domain_files(args.out_dir, sim, geom)
+    if ood:
+        all_errors += ood
+    else:
+        print("out-of-domain planes: no files produced (as expected)")
 
     # --- openPMD -----------------------------------------------------------
     op_records, op_ok, op_msg = read_openpmd(args.out_dir, sim, geom)

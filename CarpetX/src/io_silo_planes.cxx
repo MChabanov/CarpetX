@@ -204,6 +204,45 @@ void OutputSiloPlanes(const cGH *const cctkGH,
     const auto in_axes = in_plane_axes(plane.normal_axis);
     const int axis_a = in_axes[0], axis_b = in_axes[1];
 
+    // Skip the plane entirely -- creating no directory, data file or metafile
+    // -- if its elevation lies outside every Cartesian (patch, level) along the
+    // normal axis. The decision is purely geometric, so all ranks agree.
+    {
+      bool plane_in_domain = false;
+      for (const auto &patchdata : ghext->patchdata) {
+        if (!patchdata.is_cartesian)
+          continue;
+        for (const auto &leveldata : patchdata.leveldata) {
+          const amrex::Geometry &geom =
+              patchdata.amrcore->Geom(leveldata.level);
+          for (int gi = 0; gi < CCTK_NumGroups() && !plane_in_domain; ++gi) {
+            if (!output_group.at(gi))
+              continue;
+            if (CCTK_GroupTypeI(gi) != CCTK_GF)
+              continue;
+            const auto &groupdata = *leveldata.groupdata.at(gi);
+            if (groupdata.mfab.empty())
+              continue;
+            if (snap_to_grid_index(plane, geom,
+                                   groupdata.mfab.at(0)->ixType()) >= 0)
+              plane_in_domain = true;
+          }
+          if (plane_in_domain)
+            break;
+        }
+        if (plane_in_domain)
+          break;
+      }
+      if (!plane_in_domain) {
+        if (warned_outside_domain.insert(plane.tag).second)
+          CCTK_VWARN(CCTK_WARN_ALERT,
+                     "OutputSiloPlanes: plane %s lies outside all Cartesian "
+                     "(patch, level) extents; writing no file",
+                     plane.tag.c_str());
+        continue;
+      }
+    }
+
     const std::string subdirname =
         make_plane_subdirname(output_file, plane.tag, cctk_iteration);
     const std::string pathname = output_dir + "/" + subdirname;

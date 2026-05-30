@@ -2097,6 +2097,47 @@ void carpetx_openpmd_t::OutputOpenPMDPlanes(
     const int axis_a = (plane.normal_axis == 0) ? 1 : 0;
     const int axis_b = (plane.normal_axis == 2) ? 1 : 2;
 
+    // Skip the plane entirely -- writing no file at all -- if its elevation
+    // lies outside every Cartesian (patch, level) along the normal axis. This
+    // is a purely geometric decision (no rank-local data), so all ranks agree
+    // and the collective Series creation below stays consistent. It also avoids
+    // emitting a file whose per-level chunkInfo attributes would all be empty.
+    {
+      bool plane_in_domain = false;
+      for (const auto &patchdata : ghext->patchdata) {
+        if (!patchdata.is_cartesian)
+          continue;
+        for (const auto &leveldata : patchdata.leveldata) {
+          const amrex::Geometry &geom =
+              patchdata.amrcore->Geom(leveldata.level);
+          for (int gi = 0; gi < CCTK_NumGroups() && !plane_in_domain; ++gi) {
+            if (!output_group.at(gi))
+              continue;
+            if (CCTK_GroupTypeI(gi) != CCTK_GF)
+              continue;
+            const auto &groupdata = *leveldata.groupdata.at(gi);
+            if (groupdata.mfab.empty())
+              continue;
+            if (snap_to_grid_index(plane, geom,
+                                   groupdata.mfab.at(0)->ixType()) >= 0)
+              plane_in_domain = true;
+          }
+          if (plane_in_domain)
+            break;
+        }
+        if (plane_in_domain)
+          break;
+      }
+      if (!plane_in_domain) {
+        if (warned_outside_domain.insert(plane.tag).second)
+          CCTK_VWARN(CCTK_WARN_ALERT,
+                     "OutputOpenPMDPlanes: plane %s lies outside all Cartesian "
+                     "(patch, level) extents; writing no file",
+                     plane.tag.c_str());
+        continue;
+      }
+    }
+
     std::ostringstream fnbuf;
     fnbuf << output_dir << "/" << output_file << "." << plane.tag << ".it%08T"
           << openPMD::suffix(format);
@@ -2190,7 +2231,13 @@ void carpetx_openpmd_t::OutputOpenPMDPlanes(
               chunk_infos.push_back(box.bigEnd(axis_a) + 1);
             }
           }
-          write_iter.setAttribute("chunkInfo" + level_suffixes[l], chunk_infos);
+          // Only write chunkInfo when this (patch, level) actually intersects
+          // the plane: an empty (zero-length) array attribute cannot be read
+          // back by some openPMD/ADIOS2 versions. Readers treat an absent
+          // chunkInfo as "no chunks on this level".
+          if (!chunk_infos.empty())
+            write_iter.setAttribute("chunkInfo" + level_suffixes[l],
+                                    chunk_infos);
           write_iter.setAttribute("iteration_num" + level_suffixes[l],
                                   std::int64_t(leveldata.iteration.num));
           write_iter.setAttribute("iteration_den" + level_suffixes[l],
