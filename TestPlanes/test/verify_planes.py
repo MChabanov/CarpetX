@@ -530,48 +530,57 @@ def inspect_silo(out_dir, sim):
     if sample:
         try:
             import Silo
+            import numpy as np
             print("--- Silo module: API exploration ---")
             db = Silo.Open(sample[0], Silo.DB_READ)
-            print("  dir(db): %s" % [a for a in dir(db) if not a.startswith("_")])
+            try:
+                print("  dir(db): %s"
+                      % [a for a in dir(db) if not a.startswith("_")])
+            except Exception as e:  # noqa: BLE001
+                print("  dir(db) failed: %s" % e)
+            # NB: dir(toc) raises on this build; access fields by name only.
             toc = db.GetToc()
-            print("  dir(toc): %s"
-                  % [a for a in dir(toc) if not a.startswith("_")])
             qvn = list(getattr(toc, "qvar_names", []) or [])
             qmn = list(getattr(toc, "qmesh_names", []) or [])
+            vn = list(getattr(toc, "var_names", []) or [])
+            print("  #qvar=%d #qmesh=%d #simplevar=%d" % (len(qvn), len(qmn), len(vn)))
             print("  qvar[0]  = %r" % (qvn[0] if qvn else None))
             print("  qmesh[0] = %r" % (qmn[0] if qmn else None))
+            print("  simplevars = %r" % (vn[:8],))
 
-            def _probe(method, name, label):
-                if not hasattr(db, method) or name is None:
-                    return
-                try:
-                    r = getattr(db, method)(name)
-                except Exception as e:  # noqa: BLE001
-                    print("  db.%s(%s) FAILED: %s" % (method, label, e))
-                    return
-                print("  db.%s(%s) -> %s" % (method, label, type(r).__name__))
-                if isinstance(r, dict):
-                    for k, v in r.items():
-                        import numpy as np
+            def _show(label, val):
+                if isinstance(val, dict):
+                    print("    %s -> dict keys=%s" % (label, list(val.keys())))
+                    for k, v in val.items():
                         try:
                             a = np.asarray(v)
-                            sv = (a.shape if a.size > 12
-                                  else a.ravel().tolist())
+                            sv = (a.shape if a.size > 16 else a.ravel().tolist())
                         except Exception:  # noqa: BLE001
-                            sv = repr(v)[:80]
-                        print("       [%r] %s -> %s" % (k, type(v).__name__, sv))
+                            sv = repr(v)[:100]
+                        print("        [%r] %s = %s" % (k, type(v).__name__, sv))
                 else:
-                    attrs = [a for a in dir(r) if not a.startswith("_")]
-                    print("       attrs: %s" % attrs[:40])
-                    print("       repr: %s" % (repr(r)[:300]))
+                    try:
+                        a = np.asarray(val)
+                        sv = (a.shape if a.size > 16 else a.ravel().tolist())
+                    except Exception:  # noqa: BLE001
+                        sv = repr(val)[:200]
+                    print("    %s -> %s %s" % (label, type(val).__name__, sv))
 
-            for m in ("GetVar", "GetObject", "GetQuadvar", "GetQuadmesh"):
-                _probe(m, qvn[0] if qvn else None, "qvar")
-            for m in ("GetVar", "GetObject", "GetQuadmesh"):
-                _probe(m, qmn[0] if qmn else None, "qmesh")
+            for name, lab in ((qvn[0] if qvn else None, "qvar"),
+                              (qmn[0] if qmn else None, "qmesh")):
+                if name is None:
+                    continue
+                for meth in ("GetVarInfo", "GetVar"):
+                    if not hasattr(db, meth):
+                        continue
+                    try:
+                        _show("db.%s(%s)" % (meth, lab),
+                              getattr(db, meth)(name))
+                    except Exception as e:  # noqa: BLE001
+                        print("    db.%s(%s) FAILED: %s" % (meth, lab, e))
             db.Close()
         except Exception as exc:  # noqa: BLE001
-            print("Silo module not usable (expected in CI): %s" % exc)
+            print("Silo module exploration error: %s" % exc)
 
 
 # ---------------------------------------------------------------------------
