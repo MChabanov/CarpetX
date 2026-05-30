@@ -15,7 +15,7 @@ set -eu
 CACTUS_DIR="${CACTUS_DIR:-$PWD/../workspace/Cactus}"
 EXE="${EXE:-$CACTUS_DIR/exe/cactus_sim}"
 CARPETX_DIR="${CARPETX_DIR:-$CACTUS_DIR/repos/CarpetX}"
-MPIRUN="${MPIRUN-mpirun}"
+MPIRUN="${MPIRUN-mpiexec}"
 
 TESTDIR="$CARPETX_DIR/TestPlanes/test"
 GOLDEN="$TESTDIR/golden"
@@ -24,27 +24,40 @@ WORKDIR="${WORKDIR:-$CACTUS_DIR/test-planes-run}"
 # OpenMPI refuses to run as root unless told otherwise (containers run as root).
 export OMPI_ALLOW_RUN_AS_ROOT=1
 export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
-export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="/usr/local/lib:/usr/lib/x86_64-linux-gnu/hdf5/serial/lib:${LD_LIBRARY_PATH:-}"
 
 if [ ! -x "$EXE" ]; then
   echo "✗ executable not found or not executable: $EXE" >&2
   exit 1
 fi
 
-# Best-effort: ensure the Python readers are present.
+# Ensure the Python readers are present. openpmd_api reads the ADIOS2/BP5 plane
+# files; this needs network access (fine on GitHub runners, not on HPC login
+# nodes). Errors are shown (not hidden), and PEP 668 "externally-managed"
+# environments are handled with --break-system-packages.
+echo "python: $(command -v python3)"; python3 --version || true
+python3 -m pip --version 2>/dev/null || echo "  (no pip module)"
+
 ensure_py() {
-  python3 -c "import $1" 2>/dev/null && return 0
-  echo "  (installing python module $2)"
-  pip3 install --quiet "$2" 2>/dev/null || true
-  python3 -c "import $1" 2>/dev/null
+  mod="$1"; pkg="$2"
+  if python3 -c "import $mod" 2>/dev/null; then
+    echo "  $mod: already importable"
+    return 0
+  fi
+  echo "  installing $pkg ..."
+  python3 -m pip install "$pkg" \
+    || python3 -m pip install --break-system-packages "$pkg" \
+    || python3 -m pip install --user --break-system-packages "$pkg" \
+    || true
+  python3 -c "import $mod" 2>/dev/null
 }
-HAVE_OPENPMD=0
-ensure_py openpmd_api openpmd-api && HAVE_OPENPMD=1
+
+ensure_py openpmd_api openpmd-api && HAVE_OPENPMD=1 || HAVE_OPENPMD=0
 ensure_py h5py h5py || true
 
 if [ "$HAVE_OPENPMD" -ne 1 ]; then
-  echo "✗ openpmd_api is required for rigorous plane verification but is not" >&2
-  echo "  importable and could not be installed." >&2
+  echo "✗ openpmd_api is required for rigorous plane verification but could" >&2
+  echo "  not be imported or installed (see pip output above)." >&2
   exit 1
 fi
 
