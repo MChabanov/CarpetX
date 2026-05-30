@@ -56,11 +56,42 @@ python3 "$TESTDIR/verify_planes.py" \
   --out-dir "$W/planes-single-level" \
   --silo-mode inspect 2>&1 | head -120
 
-echo "########## (5) numeric Silo read test (--silo-mode verify) ##########"
+echo "########## (5) value-array orientation dump ##########"
+python3 - "$W/planes-single-level" <<'PY'
+import sys, glob, os, numpy as np
+import Silo, h5py
+out = sys.argv[1]
+sc = lambda v: (v[0] if isinstance(v, (list, tuple)) else v)
+files = sorted(glob.glob(os.path.join(out, "*.silo_planes.dir", "*.silo")))
+db = Silo.Open(files[0], Silo.DB_READ)
+toc = db.GetToc()
+for qv in list(getattr(toc, "qvar_names", []))[:2]:
+    info = db.GetVarInfo(qv)
+    mi = db.GetVarInfo(sc(info["meshid"]))
+    with h5py.File(files[0], "r") as h:
+        V = np.asarray(h[sc(info["value0"])][()])
+        c0 = np.asarray(h[sc(mi["coord0"])][()])
+        c1 = np.asarray(h[sc(mi["coord1"])][()])
+    print("qvar:", qv)
+    print("  centering:", sc(info["centering"]),
+          " dims1,dims2:", sc(info["dims1"]), sc(info["dims2"]),
+          " V.shape:", V.shape)
+    print("  len(c0):", len(c0), "c0[:4]:", c0[:4].tolist())
+    print("  len(c1):", len(c1), "c1[:4]:", c1[:4].tolist())
+    print("  V[0,0]=%g  V[0,1]=%g (d=%g)  V[1,0]=%g (d=%g)"
+          % (V[0, 0], V[0, 1], V[0, 1] - V[0, 0],
+             V[1, 0], V[1, 0] - V[0, 0]))
+    print("  mesh min/max idx:",
+          sc(mi["min_index1"]), sc(mi["max_index1"]),
+          sc(mi["min_index2"]), sc(mi["max_index2"]))
+db.Close()
+PY
+
+echo "########## (6) numeric Silo read test (--silo-mode verify) ##########"
 python3 "$TESTDIR/verify_planes.py" \
   --parfile "$TESTDIR/planes-single-level.par" \
   --out-dir "$W/planes-single-level" \
-  --silo-mode verify 2>&1 | tail -40
+  --silo-mode verify 2>&1 | tail -30
 
 echo "########## done ##########"
 rm -rf "$W"

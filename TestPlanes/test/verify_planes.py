@@ -436,7 +436,10 @@ def _read_silo_module(out_dir, sim, geom):
                             int(_silo_scalar(minfo["max_index2"])))
                     ca, cb, lo_a, hi_a, lo_b, hi_b = mesh_cache[meshid]
 
-                    vals = h5read(value_path)   # shape (na, nb), axis_a first
+                    # The HDF5 value array is indexed [axis_b][axis_a] (axis_a
+                    # is the fast/last index), which is exactly the Slab.values
+                    # [b][a] convention -- no transpose needed.
+                    vals = h5read(value_path)
 
                     if silo_cent == DB_ZONECENT_:
                         # values at zone centres = midpoints of node coords;
@@ -445,17 +448,16 @@ def _read_silo_module(out_dir, sim, geom):
                                     for i in range(lo_a, hi_a)]
                         coords_b = [(cb[j] + cb[j + 1]) / 2
                                     for j in range(lo_b, hi_b)]
-                        sub = vals[lo_a:hi_a, lo_b:hi_b]
+                        sub = vals[lo_b:hi_b, lo_a:hi_a]
                     else:
                         # values at nodes; interior nodes [lo, hi].
                         coords_a = list(ca[lo_a:hi_a + 1])
                         coords_b = list(cb[lo_b:hi_b + 1])
-                        sub = vals[lo_a:hi_a + 1, lo_b:hi_b + 1]
+                        sub = vals[lo_b:hi_b + 1, lo_a:hi_a + 1]
 
-                    # Slab.values is indexed [b][a]; sub is [a][b].
                     slabs.append(Slab("silo", qvname, centering, normal_axis,
                                       level, patch, axis_a, axis_b,
-                                      coords_a, coords_b, np.asarray(sub).T))
+                                      coords_a, coords_b, np.asarray(sub)))
         finally:
             db.Close()
 
