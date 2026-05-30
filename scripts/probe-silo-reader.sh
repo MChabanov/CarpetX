@@ -56,42 +56,39 @@ python3 "$TESTDIR/verify_planes.py" \
   --out-dir "$W/planes-single-level" \
   --silo-mode inspect 2>&1 | head -120
 
-echo "########## (5) value-array orientation dump ##########"
+echo "########## (5) per-centering orientation dump ##########"
 python3 - "$W/planes-single-level" <<'PY'
-import sys, glob, os, numpy as np
+import sys, glob, os, re, numpy as np
 import Silo, h5py
 out = sys.argv[1]
 sc = lambda v: (v[0] if isinstance(v, (list, tuple)) else v)
 files = sorted(glob.glob(os.path.join(out, "*.silo_planes.dir", "*.silo")))
 db = Silo.Open(files[0], Silo.DB_READ)
 toc = db.GetToc()
-for qv in list(getattr(toc, "qvar_names", []))[:2]:
-    info = db.GetVarInfo(qv)
-    mi = db.GetVarInfo(sc(info["meshid"]))
-    with h5py.File(files[0], "r") as h:
+seen = set()
+with h5py.File(files[0], "r") as h:
+    for qv in list(getattr(toc, "qvar_names", [])):
+        m = re.search(r"gf(\d\d\d)", qv)
+        if not m or m.group(1) in seen:
+            continue
+        seen.add(m.group(1))
+        info = db.GetVarInfo(qv)
+        mi = db.GetVarInfo(sc(info["meshid"]))
         V = np.asarray(h[sc(info["value0"])][()])
         c0 = np.asarray(h[sc(mi["coord0"])][()])
         c1 = np.asarray(h[sc(mi["coord1"])][()])
-    print("qvar:", qv)
-    print("  centering:", sc(info["centering"]),
-          " dims1,dims2:", sc(info["dims1"]), sc(info["dims2"]),
-          " V.shape:", V.shape)
-    print("  len(c0):", len(c0), "c0[:4]:", c0[:4].tolist())
-    print("  len(c1):", len(c1), "c1[:4]:", c1[:4].tolist())
-    print("  V[0,0]=%g  V[0,1]=%g (d=%g)  V[1,0]=%g (d=%g)"
-          % (V[0, 0], V[0, 1], V[0, 1] - V[0, 0],
-             V[1, 0], V[1, 0] - V[0, 0]))
-    print("  mesh min/max idx:",
-          sc(mi["min_index1"]), sc(mi["max_index1"]),
-          sc(mi["min_index2"]), sc(mi["max_index2"]))
+        print("gf%s cent=%s dims1,2=(%s,%s) V.shape=%s len(c0)=%d len(c1)=%d"
+              % (m.group(1), sc(info["centering"]),
+                 sc(info["dims1"]), sc(info["dims2"]),
+                 V.shape, len(c0), len(c1)))
+        print("    c0[:2]=%s c1[:2]=%s | V[0,0]=%g dV[0,1]=%g dV[1,0]=%g"
+              % (c0[:2].tolist(), c1[:2].tolist(), V[0, 0],
+                 V[0, 1] - V[0, 0], V[1, 0] - V[0, 0]))
+        print("    mesh min/max idx: a=[%s,%s] b=[%s,%s]"
+              % (sc(mi["min_index1"]), sc(mi["max_index1"]),
+                 sc(mi["min_index2"]), sc(mi["max_index2"])))
 db.Close()
 PY
-
-echo "########## (6) numeric Silo read test (--silo-mode verify) ##########"
-python3 "$TESTDIR/verify_planes.py" \
-  --parfile "$TESTDIR/planes-single-level.par" \
-  --out-dir "$W/planes-single-level" \
-  --silo-mode verify 2>&1 | tail -30
 
 echo "########## done ##########"
 rm -rf "$W"
