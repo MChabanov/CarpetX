@@ -45,25 +45,31 @@ extern "C" void TestPlanes_Set(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestPlanes_Set;
   DECLARE_CCTK_PARAMETERS;
 
-  // Fill every point (including ghosts) so that the ghost-inclusive Silo plane
-  // output and the interior-only openPMD plane output are both exactly
-  // analytic.
-  Loop::loop_all<0, 0, 0>(cctkGH,
+  // Fill the interior; ghost zones are filled by the subsequent SYNC. Only the
+  // interior is output by the openPMD writer (the rigorous numeric check), and
+  // CCTK_INITIAL re-runs on every level, so each level's interior holds f
+  // exactly regardless of prolongation accuracy.
+  Loop::loop_int<0, 0, 0>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf000(p.I) = f(p); });
-  Loop::loop_all<0, 0, 1>(cctkGH,
+  Loop::loop_int<0, 0, 1>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf001(p.I) = f(p); });
-  Loop::loop_all<0, 1, 0>(cctkGH,
+  Loop::loop_int<0, 1, 0>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf010(p.I) = f(p); });
-  Loop::loop_all<0, 1, 1>(cctkGH,
+  Loop::loop_int<0, 1, 1>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf011(p.I) = f(p); });
-  Loop::loop_all<1, 0, 0>(cctkGH,
+  Loop::loop_int<1, 0, 0>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf100(p.I) = f(p); });
-  Loop::loop_all<1, 0, 1>(cctkGH,
+  Loop::loop_int<1, 0, 1>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf101(p.I) = f(p); });
-  Loop::loop_all<1, 1, 0>(cctkGH,
+  Loop::loop_int<1, 1, 0>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf110(p.I) = f(p); });
-  Loop::loop_all<1, 1, 1>(cctkGH,
+  Loop::loop_int<1, 1, 1>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf111(p.I) = f(p); });
+}
+
+extern "C" void TestPlanes_Sync(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTSX_TestPlanes_Sync;
+  // Ghost-zone synchronization is performed by the schedule SYNC clause.
 }
 
 } // namespace TestPlanes

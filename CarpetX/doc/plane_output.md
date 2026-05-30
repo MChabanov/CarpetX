@@ -140,12 +140,15 @@ field
 f(x, y, z) = x + 100 y + 10000 z
 ```
 
-evaluated at the grid function's own centering-dependent world coordinate. `f`
-is linear, so it is exactly representable on every refinement level after
-prolongation/restriction; `TestPlanes_Set` is scheduled at both `initial` and
-`postregrid` so every (re)created level holds `f` exactly, independent of
-prolongation accuracy. The distinct decade weights make an axis swap or
-transpose in a writer immediately visible.
+evaluated at the grid function's own centering-dependent world coordinate. The
+interior is set directly (writes interior, then SYNC) at `initial` and
+`postregrid`, and `CCTK_INITIAL` re-runs on every level, so each level's
+interior holds `f` exactly -- independent of prolongation -- which is the data
+the openPMD writer emits and the numeric check uses. Writing interior + SYNC
+(not "everywhere") also keeps validity tracking consistent with a freshly
+regridded level, so the poison check after `MakeNewLevelFromCoarse` does not
+fire on not-yet-synced ghosts. The distinct decade weights make an axis swap or
+transpose immediately visible.
 
 Parfiles (`TestPlanes/test/`):
 
