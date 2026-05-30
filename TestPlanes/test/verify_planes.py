@@ -465,48 +465,86 @@ def _silo_smoke(out_dir, sim):
         len(files), n_datasets)
 
 
+def _inspect_one_hdf5(path, label, max_show_values=32):
+    import h5py
+    import numpy as np
+    print("--- %s: %s ---" % (label, path))
+    with h5py.File(path, "r") as h5:
+        # Root attributes
+        if len(h5.attrs):
+            print("  / attrs: %s" % {k: _short_attr(v) for k, v in h5.attrs.items()})
+
+        def show(name, obj):
+            if isinstance(obj, h5py.Group):
+                a = (" attrs=%s" % {k: _short_attr(v) for k, v in obj.attrs.items()}
+                     if len(obj.attrs) else "")
+                print("  [G] %s%s" % (name, a))
+                return
+            # Dataset
+            line = "  [D] %s shape=%s dtype=%s" % (name, obj.shape, obj.dtype)
+            if len(obj.attrs):
+                line += " attrs=%s" % {k: _short_attr(v) for k, v in obj.attrs.items()}
+            print(line)
+            try:
+                n = int(np.prod(obj.shape)) if obj.shape else 1
+                if n and n <= max_show_values:
+                    print("        values=%r" % (np.asarray(obj[()]).ravel().tolist()))
+            except Exception as exc:  # noqa: BLE001
+                print("        (could not read values: %s)" % exc)
+
+        h5.visititems(show)
+
+
+def _short_attr(v):
+    try:
+        import numpy as np
+        if isinstance(v, bytes):
+            return v.decode(errors="replace")
+        arr = np.asarray(v)
+        if arr.size > 12:
+            return "<%s array, size %d>" % (arr.dtype, arr.size)
+        return arr.tolist()
+    except Exception:  # noqa: BLE001
+        return repr(v)
+
+
 def inspect_silo(out_dir, sim):
-    """Dump the real Silo layout/API to help finalize the reader in-container."""
+    """Dump the real Silo layout/API to help finalize the h5py reader."""
     print("=== Silo inspection ===")
     metas = silo_meta_files(out_dir, sim)
     datas = silo_data_files(out_dir, sim)
     print("metafiles: %d, data files: %d" % (len(metas), len(datas)))
-    sample = (datas or metas)
-    if not sample:
-        print("no Silo files found in %s" % out_dir)
-        return
-    sample = sample[0]
-    print("sample: %s" % sample)
+
     try:
-        import h5py
-        with h5py.File(sample, "r") as h5:
-            print("--- HDF5 tree (h5py) ---")
-            def show(name, obj):
-                kind = "D" if isinstance(obj, h5py.Dataset) else "G"
-                extra = ""
-                if isinstance(obj, h5py.Dataset):
-                    extra = " shape=%s dtype=%s" % (obj.shape, obj.dtype)
-                print("  [%s] %s%s" % (kind, name, extra))
-            h5.visititems(show)
+        import h5py  # noqa: F401
+        if datas:
+            _inspect_one_hdf5(datas[0], "per-proc DATA file")
+        if metas:
+            _inspect_one_hdf5(metas[0], "METAFILE")
+        if not datas and not metas:
+            print("no Silo files found in %s" % out_dir)
     except Exception as exc:  # noqa: BLE001
         print("h5py inspection failed: %s" % exc)
-    try:
-        import Silo
-        print("--- Silo module ---")
-        db = Silo.Open(sample, Silo.DB_READ)
-        toc = db.GetToc()
-        for attr in ("qmesh_names", "qvar_names", "multimesh_names",
-                     "multivar_names", "var_names", "dir_names"):
-            if hasattr(toc, attr):
-                print("  toc.%s = %r" % (attr, getattr(toc, attr)))
-        qvn = getattr(toc, "qvar_names", [])
-        if qvn:
-            qv = db.GetQuadvar(qvn[0])
-            print("  GetQuadvar(%r) attrs: %s" % (
-                qvn[0], [a for a in dir(qv) if not a.startswith("__")]))
-        db.Close()
-    except Exception as exc:  # noqa: BLE001
-        print("Silo module not usable: %s" % exc)
+
+    sample = (datas or metas)
+    if sample:
+        try:
+            import Silo
+            print("--- Silo module present ---")
+            db = Silo.Open(sample[0], Silo.DB_READ)
+            toc = db.GetToc()
+            for attr in ("qmesh_names", "qvar_names", "multimesh_names",
+                         "multivar_names", "var_names", "dir_names"):
+                if hasattr(toc, attr):
+                    print("  toc.%s = %r" % (attr, getattr(toc, attr)))
+            qvn = getattr(toc, "qvar_names", [])
+            if qvn:
+                qv = db.GetQuadvar(qvn[0])
+                print("  GetQuadvar(%r) attrs: %s" % (
+                    qvn[0], [a for a in dir(qv) if not a.startswith("__")]))
+            db.Close()
+        except Exception as exc:  # noqa: BLE001
+            print("Silo module not usable (expected in CI): %s" % exc)
 
 
 # ---------------------------------------------------------------------------
