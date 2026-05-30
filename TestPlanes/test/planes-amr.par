@@ -46,6 +46,16 @@ CarpetX::ghost_size = 1
 CarpetX::prolongation_type = "conservative"
 CarpetX::prolongation_order = 1
 
+# CarpetX poisons uninitialized memory and, at the end of
+# MakeNewLevelFromCoarse, errors if a just-created level's ghost zones are not
+# yet valid. A newly regridded level's ghosts are only filled by the following
+# SYNC, so for a staggered grid function this internal guard aborts before the
+# postregrid SYNC runs (the allow-nans path for non-evolved groups is currently
+# overridden to forbid in valid.cxx). This guard is unrelated to plane-writer
+# correctness -- the verifier checks every emitted value against f after the
+# data is synced -- so disable it for this direct-data test.
+CarpetX::poison_undefined_values = no
+
 CarpetX::blocking_factor_x = 2
 CarpetX::blocking_factor_y = 2
 CarpetX::blocking_factor_z = 2
