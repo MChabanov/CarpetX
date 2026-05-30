@@ -22,9 +22,14 @@
 #   MPIRUN    MPI launcher; empty by default (serial). Only used if NPROCS > 1,
 #             e.g. NPROCS=2 MPIRUN="srun" for a parallel run.
 #   NPROCS    Ranks to run each case on (default: 1).
+#   GOLDEN_INCLUDE_SILO  If 1, also archive the (large, not-CI-compared) .silo
+#             output. Default 0: only the openPMD .bp5 output is kept.
 #   WORKDIR   Scratch run directory (default: a fresh mktemp dir).
 #
 # The reference is written to TestPlanes/test/golden/<parfile>/ for each parfile.
+# Only the openPMD .bp5 output is kept by default -- it is what the verifier
+# compares in CI; the Silo .silo output is large and not numerically compared
+# in CI, so it is omitted (set GOLDEN_INCLUDE_SILO=1 to keep it).
 
 set -eu
 
@@ -78,10 +83,25 @@ make_one() {
   dest="$GOLDEN/$par_base"
   rm -rf "$dest"
   mkdir -p "$dest"
-  # Copy the produced plane output verbatim (.bp5 dirs, .silo metafiles, the
-  # .silo_planes.dir subdirs, and the .visit index files).
-  cp -r "$WORKDIR/$par_base/." "$dest/"
-  echo "  wrote $(find "$dest" -type f | wc -l) files to $dest"
+  # Copy only the openPMD (.bp5) plane output -- that is what the verifier
+  # numerically compares in CI. The Silo (.silo) output is large (one HDF5
+  # object per AMR component) and is not numerically compared in CI (no Silo
+  # Python reader there), so it is excluded by default. Set
+  # GOLDEN_INCLUDE_SILO=1 to archive it anyway. The run-timing performance.yaml
+  # is never golden.
+  shopt -s nullglob
+  for f in "$WORKDIR/$par_base/"*.it*.bp* "$WORKDIR/$par_base/"*.openpmd.visit; do
+    cp -r "$f" "$dest/"
+  done
+  if [ "${GOLDEN_INCLUDE_SILO:-0}" = "1" ]; then
+    for f in "$WORKDIR/$par_base/"*.it*.silo \
+             "$WORKDIR/$par_base/"*.silo_planes.dir \
+             "$WORKDIR/$par_base/"*.silo_planes.visit; do
+      cp -r "$f" "$dest/"
+    done
+  fi
+  shopt -u nullglob
+  echo "  wrote $(find "$dest" -type f | wc -l) files ($(du -sh "$dest" | cut -f1)) to $dest"
 }
 
 make_one planes-single-level
