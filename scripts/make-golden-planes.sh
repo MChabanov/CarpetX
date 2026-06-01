@@ -106,6 +106,7 @@ make_one() {
 
 make_one planes-single-level
 make_one planes-amr
+make_one planes-amr-midlevel
 make_one planes-edge-cases
 
 echo "================================================================"

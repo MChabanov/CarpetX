@@ -114,6 +114,7 @@ run_and_verify() {
 # edge-case run only needs to exercise parsing/snapping, so it runs serially.
 run_and_verify planes-single-level 2
 run_and_verify planes-amr 2
+run_and_verify planes-amr-midlevel 2
 run_and_verify planes-edge-cases 1
 
 echo "================================================================"

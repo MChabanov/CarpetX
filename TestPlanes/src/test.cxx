@@ -31,12 +31,16 @@ extern "C" void TestPlanes_SetError(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestPlanes_SetError;
   DECLARE_CCTK_PARAMETERS;
 
-  // Flag a cube at the domain centre for refinement (used by the AMR parfile;
-  // harmless for single-level runs since regridding is then disabled).
+  // Flag a cube at the domain centre for refinement (used by the AMR parfiles;
+  // harmless for single-level runs since regridding is then disabled). The
+  // half-size is per-level (refined_radius[L]); a finer level can nest strictly
+  // inside a coarser one, so a plane can intersect coarse/middle levels but not
+  // the finest. The setup is fixed to 3 levels, so clamp the index defensively.
+  const int lvl = cctk_level < 3 ? cctk_level : 2;
   Loop::loop_int<1, 1, 1>(cctkGH, [&](const Loop::PointDesc &p) {
-    const bool inside = fabs(p.x - refined_center_x) <= refined_radius &&
-                        fabs(p.y - refined_center_y) <= refined_radius &&
-                        fabs(p.z - refined_center_z) <= refined_radius;
+    const bool inside = fabs(p.x - refined_center_x) <= refined_radius[lvl] &&
+                        fabs(p.y - refined_center_y) <= refined_radius[lvl] &&
+                        fabs(p.z - refined_center_z) <= refined_radius[lvl];
     regrid_error(p.I) = inside ? 1 : 0;
   });
 }
