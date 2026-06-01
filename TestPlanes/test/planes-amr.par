@@ -1,13 +1,19 @@
 ## 2D plane output on a 3-level AMR hierarchy.
 ##
-## Identical field, domain, centerings and plane specs as
-## planes-single-level.par, but with three refinement levels covering a cube of
-## half-width 4 about the domain centre (4,8,6): x in [0,8], y in [4,12],
-## z in [2,10]. All six planes pass through that cube, so each plane intersects
-## every level -- exercising per-level snapping, the Silo AMR mrgtree level
-## shadowing, and the openPMD per-(patch,level) hierarchy attributes. Because
-## TestPlanes re-applies the analytic field at initial and postregrid, every
-## level holds f exactly, independent of prolongation.
+## Identical field, domain and centerings as planes-single-level.par, but with
+## three refinement levels covering a cube of half-width 4 about the domain
+## centre (4,8,6): x in [0,8], y in [4,12], z in [2,10]. The first six planes
+## pass through that cube, so each intersects every level -- exercising per-level
+## snapping, the Silo AMR mrgtree level shadowing, and the openPMD
+## per-(patch,level) hierarchy attributes. A seventh plane (xy:14.0, i.e. z=14)
+## lies inside the domain but ABOVE the refined cube, so it intersects only the
+## coarsest level (level 0): no coarse->fine parent-child relationship exists for
+## it, so the Silo metafile must fall back to a plain multimesh (no mrgtree) --
+## a single-level AMR child map is all-empty and crashes VisIt's DBFreeGroupelmap
+## (see CarpetX/doc/plane_output.md). This case verifies that the mrgtree guard
+## keys on the actual child count, not just max_num_levels>1. Because TestPlanes
+## re-applies the analytic field at initial and postregrid, every level holds f
+## exactly, independent of prolongation.
 
 ActiveThorns = "
     CarpetX
@@ -65,7 +71,12 @@ CarpetX::max_grid_size_z = 8
 TestPlanes::refined_center_x = 4.0
 TestPlanes::refined_center_y = 8.0
 TestPlanes::refined_center_z = 6.0
-TestPlanes::refined_radius = 4.0
+# Uniform half-size 4 on every level: levels 1 and 2 cover the same nominal cube
+# (they differ only by a ~1-cell buffer/nesting shell), so each in-cube plane
+# crosses all three levels. planes-amr-midlevel.par nests the levels instead.
+TestPlanes::refined_radius[0] = 4.0
+TestPlanes::refined_radius[1] = 4.0
+TestPlanes::refined_radius[2] = 4.0
 
 IO::out_dir = $parfile
 IO::out_every = 1
@@ -75,8 +86,9 @@ IO::parfile_write = no
 CarpetX::out_metadata = no
 
 # All eight centerings, written on the three principal planes (at the domain
-# centre) plus one offset per direction; all lie inside the refined cube so
-# they cross every level.
+# centre) plus one offset per direction (all inside the refined cube, so they
+# cross every level), plus xy:14.0 which is inside the domain but above the cube
+# and so intersects only the coarsest level (plain-multimesh / no-mrgtree path).
 CarpetX::out_silo_plane_vars = "
     TestPlanes::gf000
     TestPlanes::gf001
@@ -87,7 +99,7 @@ CarpetX::out_silo_plane_vars = "
     TestPlanes::gf110
     TestPlanes::gf111
 "
-CarpetX::out_silo_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0"
+CarpetX::out_silo_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0, xy:14.0"
 CarpetX::out_silo_planes_every = 1
 
 CarpetX::out_openpmd_plane_vars = "
@@ -100,7 +112,7 @@ CarpetX::out_openpmd_plane_vars = "
     TestPlanes::gf110
     TestPlanes::gf111
 "
-CarpetX::out_openpmd_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0"
+CarpetX::out_openpmd_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0, xy:14.0"
 CarpetX::out_openpmd_planes_every = 1
 
 CarpetX::out_planes_int_precision = 4

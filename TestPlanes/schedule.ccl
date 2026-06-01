@@ -15,14 +15,9 @@ SCHEDULE TestPlanes_SetError AT postinitial
   WRITES: CarpetXRegrid::regrid_error(interior)
 } "Flag the refined region"
 
-# Set the analytic field on the interior and then SYNC to fill ghost zones
-# (inter-box copy, the linear-extrapolation outer boundary, and coarse-fine
-# prolongation). Writing the interior and syncing -- rather than writing
-# "everywhere" -- keeps CarpetX's validity tracking consistent with how a newly
-# regridded level is actually populated, so the poison check after
-# MakeNewLevelFromCoarse does not fire on the not-yet-synced ghost zones.
-# Scheduling at both initial and postregrid keeps every (re)created level
-# holding f exactly, independent of prolongation.
+# Set the analytic field everywhere (interior + ghost zones), so no SYNC is
+# needed. Scheduling at both initial and postregrid keeps every (re)created
+# level holding f exactly, independent of prolongation.
 SCHEDULE GROUP TestPlanes_SetValue AT initial
 {
 } "Set up analytic test data"
@@ -34,19 +29,7 @@ SCHEDULE GROUP TestPlanes_SetValue AT postregrid
 SCHEDULE TestPlanes_Set IN TestPlanes_SetValue
 {
   LANG: C
-  WRITES: gf000(interior), gf001(interior), gf010(interior), gf011(interior),
-          gf100(interior), gf101(interior), gf110(interior), gf111(interior)
-} "Set analytic test data f(x,y,z) = x + 100 y + 10000 z on the interior"
-
-SCHEDULE TestPlanes_Sync IN TestPlanes_SetValue AFTER TestPlanes_Set
-{
-  LANG: C
-  SYNC: gf000
-  SYNC: gf001
-  SYNC: gf010
-  SYNC: gf011
-  SYNC: gf100
-  SYNC: gf101
-  SYNC: gf110
-  SYNC: gf111
-} "Synchronize analytic test data"
+  WRITES: gf000(everywhere), gf001(everywhere), gf010(everywhere),
+          gf011(everywhere), gf100(everywhere), gf101(everywhere),
+          gf110(everywhere), gf111(everywhere)
+} "Set analytic test data f(x,y,z) = x + 100 y + 10000 z everywhere"

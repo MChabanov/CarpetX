@@ -31,12 +31,16 @@ extern "C" void TestPlanes_SetError(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestPlanes_SetError;
   DECLARE_CCTK_PARAMETERS;
 
-  // Flag a cube at the domain centre for refinement (used by the AMR parfile;
-  // harmless for single-level runs since regridding is then disabled).
+  // Flag a cube at the domain centre for refinement (used by the AMR parfiles;
+  // harmless for single-level runs since regridding is then disabled). The
+  // half-size is per-level (refined_radius[L]); a finer level can nest strictly
+  // inside a coarser one, so a plane can intersect coarse/middle levels but not
+  // the finest. The setup is fixed to 3 levels, so clamp the index defensively.
+  const int lvl = cctk_level < 3 ? cctk_level : 2;
   Loop::loop_int<1, 1, 1>(cctkGH, [&](const Loop::PointDesc &p) {
-    const bool inside = fabs(p.x - refined_center_x) <= refined_radius &&
-                        fabs(p.y - refined_center_y) <= refined_radius &&
-                        fabs(p.z - refined_center_z) <= refined_radius;
+    const bool inside = fabs(p.x - refined_center_x) <= refined_radius[lvl] &&
+                        fabs(p.y - refined_center_y) <= refined_radius[lvl] &&
+                        fabs(p.z - refined_center_z) <= refined_radius[lvl];
     regrid_error(p.I) = inside ? 1 : 0;
   });
 }
@@ -45,31 +49,25 @@ extern "C" void TestPlanes_Set(CCTK_ARGUMENTS) {
   DECLARE_CCTK_ARGUMENTSX_TestPlanes_Set;
   DECLARE_CCTK_PARAMETERS;
 
-  // Fill the interior; ghost zones are filled by the subsequent SYNC. Only the
-  // interior is output by the openPMD writer (the rigorous numeric check), and
-  // CCTK_INITIAL re-runs on every level, so each level's interior holds f
-  // exactly regardless of prolongation accuracy.
-  Loop::loop_int<0, 0, 0>(cctkGH,
+  // Fill everywhere (interior + ghost zones), so no SYNC is needed. f is linear
+  // and CCTK_INITIAL re-runs on every level, so every point -- interior and
+  // ghost -- holds f exactly regardless of prolongation accuracy.
+  Loop::loop_all<0, 0, 0>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf000(p.I) = f(p); });
-  Loop::loop_int<0, 0, 1>(cctkGH,
+  Loop::loop_all<0, 0, 1>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf001(p.I) = f(p); });
-  Loop::loop_int<0, 1, 0>(cctkGH,
+  Loop::loop_all<0, 1, 0>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf010(p.I) = f(p); });
-  Loop::loop_int<0, 1, 1>(cctkGH,
+  Loop::loop_all<0, 1, 1>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf011(p.I) = f(p); });
-  Loop::loop_int<1, 0, 0>(cctkGH,
+  Loop::loop_all<1, 0, 0>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf100(p.I) = f(p); });
-  Loop::loop_int<1, 0, 1>(cctkGH,
+  Loop::loop_all<1, 0, 1>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf101(p.I) = f(p); });
-  Loop::loop_int<1, 1, 0>(cctkGH,
+  Loop::loop_all<1, 1, 0>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf110(p.I) = f(p); });
-  Loop::loop_int<1, 1, 1>(cctkGH,
+  Loop::loop_all<1, 1, 1>(cctkGH,
                           [&](const Loop::PointDesc &p) { gf111(p.I) = f(p); });
-}
-
-extern "C" void TestPlanes_Sync(CCTK_ARGUMENTS) {
-  DECLARE_CCTK_ARGUMENTSX_TestPlanes_Sync;
-  // Ghost-zone synchronization is performed by the schedule SYNC clause.
 }
 
 } // namespace TestPlanes

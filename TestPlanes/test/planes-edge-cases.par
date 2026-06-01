@@ -10,6 +10,14 @@
 ##              that rounded value is both the tag and the snap target.
 ##   xy:100.0   outside the domain along z: must emit a one-time warning and be
 ##              skipped (no slab written).
+##   yz:-4.0    exactly on the lower x domain face (x=xmin): vertex-in-x
+##              centerings emit the boundary vertex, while cell-in-x centerings
+##              snap half a cell outside the domain and produce no slab -- so the
+##              same spec yields slabs for some centerings and none for others.
+##   nocolon / qr:1.0 / xy:abc / xz:2.0junk
+##              malformed specs (missing ':', unknown axes, unparseable
+##              elevation, trailing junk): each is skipped with a one-time
+##              warning; the valid planes are still written.
 ##
 ## The verifier checks every value that *is* written against f at its recorded
 ## coordinate, and confirms the out-of-domain plane produced no data.
@@ -66,7 +74,7 @@ CarpetX::out_silo_plane_vars = "
     TestPlanes::gf110
     TestPlanes::gf111
 "
-CarpetX::out_silo_planes = "yz:3.5, xz:-1.0, xy:5.1234, xy:100.0"
+CarpetX::out_silo_planes = "yz:3.5, xz:-1.0, xy:5.1234, xy:100.0, yz:-4.0, nocolon, qr:1.0, xy:abc, xz:2.0junk"
 CarpetX::out_silo_planes_every = 1
 
 CarpetX::out_openpmd_plane_vars = "
@@ -79,7 +87,7 @@ CarpetX::out_openpmd_plane_vars = "
     TestPlanes::gf110
     TestPlanes::gf111
 "
-CarpetX::out_openpmd_planes = "yz:3.5, xz:-1.0, xy:5.1234, xy:100.0"
+CarpetX::out_openpmd_planes = "yz:3.5, xz:-1.0, xy:5.1234, xy:100.0, yz:-4.0, nocolon, qr:1.0, xy:abc, xz:2.0junk"
 CarpetX::out_openpmd_planes_every = 1
 
 CarpetX::out_planes_int_precision = 4

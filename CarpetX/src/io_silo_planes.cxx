@@ -469,12 +469,21 @@ void OutputSiloPlanes(const cGH *const cctkGH,
       }
     }
 
-    if (!any_slab_emitted) {
-      const std::string key = plane.tag;
-      if (warned_outside_domain.insert(key).second)
+    // The geometric pre-check above already wrote no file for a plane outside
+    // every level, so reaching here means the plane is in domain. Since
+    // any_slab_emitted is per-rank, a rank that owns no intersecting box
+    // legitimately emits nothing; only warn if NO rank emitted anything (a real
+    // inconsistency), and only from the metafile rank to avoid duplicates.
+    {
+      int local_emitted = any_slab_emitted ? 1 : 0;
+      int global_emitted = 0;
+      MPI_Allreduce(&local_emitted, &global_emitted, 1, MPI_INT, MPI_LOR,
+                    mpi_comm);
+      if (!global_emitted && write_metafile &&
+          warned_outside_domain.insert(plane.tag).second)
         CCTK_VWARN(CCTK_WARN_ALERT,
-                   "OutputSiloPlanes: plane %s lies outside all Cartesian "
-                   "(patch, level) extents on this iteration",
+                   "OutputSiloPlanes: plane %s produced no data on any rank "
+                   "this iteration",
                    plane.tag.c_str());
     }
 
@@ -639,242 +648,268 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               multimeshname + "_wmrgtree_lvlMaps";
           const std::string childmaps_name =
               multimeshname + "_wmrgtree_chldMaps";
+          // Per-multimesh tree name: one metafile holds several multimeshes
+          // (one per centering), so a shared "mrgTree" would be overwritten and
+          // the earlier multimeshes would reference another centering's maps.
+          const std::string mrgtree_name = multimeshname + "_mrgTree";
 
-          {
-            std::vector<int> segment_types(nlevels, DB_BLOCKCENT);
-            std::vector<std::vector<int> > segment_data(nlevels);
-            for (int l = 0; l < nlevels; ++l) {
-              segment_data[l].reserve(ncomps_level[l]);
-              for (int c = 0; c < ncomps_level[l]; ++c)
-                segment_data[l].push_back(comp0_level[l] + c);
+          // Map each component to its finer-level children. The AMR mrgtree is
+          // emitted only when some parent->child relationship exists: otherwise
+          // (single level, or a plane crossing one level) the child map is all
+          // empty, Silo stores no segment-data array, and VisIt crashes freeing
+          // it (DBFreeGroupelmap on a NULL array). A non-AMR dataset is written
+          // as a plain multimesh. See CarpetX/doc/plane_output.md.
+          std::vector<std::vector<int> > child_data(ncomps_total);
+          for (int idx = 0; idx < ncomps_total; ++idx) {
+            const auto &s = slabs[idx];
+            const int fine_level = s.level + 1;
+            if (fine_level >= nlevels)
+              continue;
+            const int fine_comp0 = comp0_level_patch[fine_level][s.patch];
+            const int fine_ncomps = ncomps_level_patch[fine_level][s.patch];
+            const std::array<int, 2> ref_lo = {2 * s.interior_ilo[0],
+                                               2 * s.interior_ilo[1]};
+            const std::array<int, 2> ref_hi = {2 * s.interior_ihi[0] + 1,
+                                               2 * s.interior_ihi[1] + 1};
+            for (int fi = 0; fi < fine_ncomps; ++fi) {
+              const auto &fs = slabs[fine_comp0 + fi];
+              if (fs.interior_ihi[0] >= ref_lo[0] &&
+                  fs.interior_ilo[0] <= ref_hi[0] &&
+                  fs.interior_ihi[1] >= ref_lo[1] &&
+                  fs.interior_ilo[1] <= ref_hi[1])
+                child_data[idx].push_back(fine_comp0 + fi);
             }
-            std::vector<int> segment_lengths;
-            std::vector<const int *> segment_data_ptrs;
-            segment_lengths.reserve(nlevels);
-            segment_data_ptrs.reserve(nlevels);
-            for (const auto &d : segment_data) {
-              segment_lengths.push_back(int(d.size()));
-              segment_data_ptrs.push_back(d.data());
-            }
-            ierr = DBPutGroupelmap(
-                metafile.get(), levelmaps_name.c_str(), nlevels,
-                segment_types.data(), segment_lengths.data(), nullptr,
-                segment_data_ptrs.data(), nullptr, 0, nullptr);
-            assert(!ierr);
           }
-
-          std::vector<int> num_children;
-          {
-            std::vector<int> segment_types(ncomps_total, DB_BLOCKCENT);
-            std::vector<std::vector<int> > segment_data(ncomps_total);
-            for (int idx = 0; idx < ncomps_total; ++idx) {
-              const auto &s = slabs[idx];
-              const int fine_level = s.level + 1;
-              if (fine_level >= nlevels)
-                continue;
-              const int fine_comp0 = comp0_level_patch[fine_level][s.patch];
-              const int fine_ncomps = ncomps_level_patch[fine_level][s.patch];
-              const std::array<int, 2> ref_lo = {2 * s.interior_ilo[0],
-                                                 2 * s.interior_ilo[1]};
-              const std::array<int, 2> ref_hi = {2 * s.interior_ihi[0] + 1,
-                                                 2 * s.interior_ihi[1] + 1};
-              for (int fi = 0; fi < fine_ncomps; ++fi) {
-                const auto &fs = slabs[fine_comp0 + fi];
-                if (fs.interior_ihi[0] >= ref_lo[0] &&
-                    fs.interior_ilo[0] <= ref_hi[0] &&
-                    fs.interior_ihi[1] >= ref_lo[1] &&
-                    fs.interior_ilo[1] <= ref_hi[1])
-                  segment_data[idx].push_back(fine_comp0 + fi);
-              }
-            }
-            num_children.reserve(ncomps_total);
-            std::vector<const int *> segment_data_ptrs;
-            segment_data_ptrs.reserve(ncomps_total);
-            for (const auto &d : segment_data) {
-              num_children.push_back(int(d.size()));
-              segment_data_ptrs.push_back(d.data());
-            }
-            ierr = DBPutGroupelmap(
-                metafile.get(), childmaps_name.c_str(), ncomps_total,
-                segment_types.data(), num_children.data(), nullptr,
-                segment_data_ptrs.data(), nullptr, 0, nullptr);
-            assert(!ierr);
+          std::vector<int> num_children(ncomps_total);
+          int total_children = 0;
+          for (int idx = 0; idx < ncomps_total; ++idx) {
+            num_children[idx] = int(child_data[idx].size());
+            total_children += num_children[idx];
           }
+          const bool emit_amr = total_children > 0;
 
-          {
-            const int max_children = 2;
-            const DB::ptr<DBmrgtree> mrgtree =
-                DB::make(DBMakeMrgtree(DB_MULTIMESH, 0, max_children, nullptr));
-            assert(mrgtree);
-            ierr = DBAddRegion(mrgtree.get(), "amr_decomp", 0, max_children,
-                               nullptr, 0, nullptr, nullptr, nullptr, nullptr);
-            assert(!ierr);
-            ierr = DBSetCwr(mrgtree.get(), "amr_decomp");
-            assert(ierr >= 0);
-
+          if (emit_amr) {
             {
-              ierr = DBAddRegion(mrgtree.get(), "levels", 0, nlevels, nullptr,
-                                 0, nullptr, nullptr, nullptr, nullptr);
-              assert(!ierr);
-              ierr = DBSetCwr(mrgtree.get(), "levels");
-              assert(ierr >= 0);
-              const std::vector<std::string> region_names{"@level%d@n"};
-              std::vector<const char *> region_name_ptrs;
-              region_name_ptrs.reserve(region_names.size());
-              for (const auto &n : region_names)
-                region_name_ptrs.push_back(n.c_str());
-              std::vector<int> segment_ids(nlevels);
               std::vector<int> segment_types(nlevels, DB_BLOCKCENT);
-              for (int l = 0; l < nlevels; ++l)
-                segment_ids[l] = l;
-              ierr = DBAddRegionArray(
-                  mrgtree.get(), nlevels, region_name_ptrs.data(), 0,
-                  levelmaps_name.c_str(), 1, segment_ids.data(),
-                  ncomps_level.data(), segment_types.data(), nullptr);
+              std::vector<std::vector<int> > segment_data(nlevels);
+              for (int l = 0; l < nlevels; ++l) {
+                segment_data[l].reserve(ncomps_level[l]);
+                for (int c = 0; c < ncomps_level[l]; ++c)
+                  segment_data[l].push_back(comp0_level[l] + c);
+              }
+              std::vector<int> segment_lengths;
+              std::vector<const int *> segment_data_ptrs;
+              segment_lengths.reserve(nlevels);
+              segment_data_ptrs.reserve(nlevels);
+              for (const auto &d : segment_data) {
+                segment_lengths.push_back(int(d.size()));
+                segment_data_ptrs.push_back(d.data());
+              }
+              ierr = DBPutGroupelmap(
+                  metafile.get(), levelmaps_name.c_str(), nlevels,
+                  segment_types.data(), segment_lengths.data(), nullptr,
+                  segment_data_ptrs.data(), nullptr, 0, nullptr);
               assert(!ierr);
-              ierr = DBSetCwr(mrgtree.get(), "..");
-              assert(ierr >= 0);
             }
 
             {
-              ierr =
-                  DBAddRegion(mrgtree.get(), "patches", 0, ncomps_total,
-                              nullptr, 0, nullptr, nullptr, nullptr, nullptr);
-              assert(ierr >= 0);
-              ierr = DBSetCwr(mrgtree.get(), "patches");
-              assert(ierr >= 0);
-              const std::vector<std::string> region_names{"@patch%d@n"};
-              std::vector<const char *> region_name_ptrs;
-              region_name_ptrs.reserve(region_names.size());
-              for (const auto &n : region_names)
-                region_name_ptrs.push_back(n.c_str());
-              std::vector<int> segment_ids(ncomps_total);
               std::vector<int> segment_types(ncomps_total, DB_BLOCKCENT);
-              for (int c = 0; c < ncomps_total; ++c)
-                segment_ids[c] = c;
-              ierr = DBAddRegionArray(
-                  mrgtree.get(), ncomps_total, region_name_ptrs.data(), 0,
-                  childmaps_name.c_str(), 1, segment_ids.data(),
-                  num_children.data(), segment_types.data(), nullptr);
-              ierr = DBSetCwr(mrgtree.get(), "..");
-              assert(ierr >= 0);
+              std::vector<const int *> segment_data_ptrs;
+              segment_data_ptrs.reserve(ncomps_total);
+              for (const auto &d : child_data)
+                segment_data_ptrs.push_back(d.data());
+              ierr = DBPutGroupelmap(
+                  metafile.get(), childmaps_name.c_str(), ncomps_total,
+                  segment_types.data(), num_children.data(), nullptr,
+                  segment_data_ptrs.data(), nullptr, 0, nullptr);
+              assert(!ierr);
             }
 
             {
-              const std::vector<std::string> mrgv_onames{
-                  multimeshname + "_wmrgtree_lvlRatios",
-                  multimeshname + "_wmrgtree_ijkExts",
-                  multimeshname + "_wmrgtree_xyzExts", "rank"};
-              std::vector<const char *> mrgv_oname_ptrs;
-              mrgv_oname_ptrs.reserve(mrgv_onames.size() + 1);
-              for (const auto &n : mrgv_onames)
-                mrgv_oname_ptrs.push_back(n.c_str());
-              mrgv_oname_ptrs.push_back(nullptr);
-
-              const DB::ptr<DBoptlist> mt_optlist = DB::make(DBMakeOptlist(10));
-              assert(mt_optlist);
-              ierr = DBAddOption(mt_optlist.get(), DBOPT_MRGV_ONAMES,
-                                 mrgv_oname_ptrs.data());
+              const int max_children = 2;
+              const DB::ptr<DBmrgtree> mrgtree = DB::make(
+                  DBMakeMrgtree(DB_MULTIMESH, 0, max_children, nullptr));
+              assert(mrgtree);
+              ierr =
+                  DBAddRegion(mrgtree.get(), "amr_decomp", 0, max_children,
+                              nullptr, 0, nullptr, nullptr, nullptr, nullptr);
               assert(!ierr);
-              ierr = DBPutMrgtree(metafile.get(), "mrgTree", "amr_mesh",
-                                  mrgtree.get(), mt_optlist.get());
+              ierr = DBSetCwr(mrgtree.get(), "amr_decomp");
+              assert(ierr >= 0);
+
+              {
+                ierr = DBAddRegion(mrgtree.get(), "levels", 0, nlevels, nullptr,
+                                   0, nullptr, nullptr, nullptr, nullptr);
+                assert(!ierr);
+                ierr = DBSetCwr(mrgtree.get(), "levels");
+                assert(ierr >= 0);
+                const std::vector<std::string> region_names{"@level%d@n"};
+                std::vector<const char *> region_name_ptrs;
+                region_name_ptrs.reserve(region_names.size());
+                for (const auto &n : region_names)
+                  region_name_ptrs.push_back(n.c_str());
+                std::vector<int> segment_ids(nlevels);
+                std::vector<int> segment_types(nlevels, DB_BLOCKCENT);
+                for (int l = 0; l < nlevels; ++l)
+                  segment_ids[l] = l;
+                ierr = DBAddRegionArray(
+                    mrgtree.get(), nlevels, region_name_ptrs.data(), 0,
+                    levelmaps_name.c_str(), 1, segment_ids.data(),
+                    ncomps_level.data(), segment_types.data(), nullptr);
+                assert(!ierr);
+                ierr = DBSetCwr(mrgtree.get(), "..");
+                assert(ierr >= 0);
+              }
+
+              {
+                ierr =
+                    DBAddRegion(mrgtree.get(), "patches", 0, ncomps_total,
+                                nullptr, 0, nullptr, nullptr, nullptr, nullptr);
+                assert(ierr >= 0);
+                ierr = DBSetCwr(mrgtree.get(), "patches");
+                assert(ierr >= 0);
+                const std::vector<std::string> region_names{"@patch%d@n"};
+                std::vector<const char *> region_name_ptrs;
+                region_name_ptrs.reserve(region_names.size());
+                for (const auto &n : region_names)
+                  region_name_ptrs.push_back(n.c_str());
+                std::vector<int> segment_ids(ncomps_total);
+                std::vector<int> segment_types(ncomps_total, DB_BLOCKCENT);
+                for (int c = 0; c < ncomps_total; ++c)
+                  segment_ids[c] = c;
+                ierr = DBAddRegionArray(
+                    mrgtree.get(), ncomps_total, region_name_ptrs.data(), 0,
+                    childmaps_name.c_str(), 1, segment_ids.data(),
+                    num_children.data(), segment_types.data(), nullptr);
+                ierr = DBSetCwr(mrgtree.get(), "..");
+                assert(ierr >= 0);
+              }
+
+              {
+                const std::vector<std::string> mrgv_onames{
+                    multimeshname + "_wmrgtree_lvlRatios",
+                    multimeshname + "_wmrgtree_ijkExts",
+                    multimeshname + "_wmrgtree_xyzExts", "rank"};
+                std::vector<const char *> mrgv_oname_ptrs;
+                mrgv_oname_ptrs.reserve(mrgv_onames.size() + 1);
+                for (const auto &n : mrgv_onames)
+                  mrgv_oname_ptrs.push_back(n.c_str());
+                mrgv_oname_ptrs.push_back(nullptr);
+
+                const DB::ptr<DBoptlist> mt_optlist =
+                    DB::make(DBMakeOptlist(10));
+                assert(mt_optlist);
+                ierr = DBAddOption(mt_optlist.get(), DBOPT_MRGV_ONAMES,
+                                   mrgv_oname_ptrs.data());
+                assert(!ierr);
+                ierr =
+                    DBPutMrgtree(metafile.get(), mrgtree_name.c_str(),
+                                 "amr_mesh", mrgtree.get(), mt_optlist.get());
+                assert(!ierr);
+              }
+            }
+
+            {
+              const std::string levelrationame =
+                  multimeshname + "_wmrgtree_lvlRatios";
+              const std::vector<std::string> compnames{"iRatio", "jRatio"};
+              std::vector<const char *> compname_ptrs;
+              compname_ptrs.reserve(compnames.size());
+              for (const auto &n : compnames)
+                compname_ptrs.push_back(n.c_str());
+              const std::vector<std::string> regionnames{"@level%d@n"};
+              std::vector<const char *> regionname_ptrs;
+              regionname_ptrs.reserve(regionnames.size());
+              for (const auto &n : regionnames)
+                regionname_ptrs.push_back(n.c_str());
+              // One ratio value per region (= per level): DBPutMrgvar reads
+              // nlevels values from each component pointer, so the buffer must
+              // hold nlevels entries (every level refines by 2). A single entry
+              // would make Silo read past the end for nlevels > 1.
+              std::array<std::vector<int>, 2> ratio_data;
+              for (int d = 0; d < 2; ++d)
+                ratio_data[d].assign(nlevels, 2);
+              std::array<const void *, 2> ratio_data_ptrs;
+              for (int d = 0; d < 2; ++d)
+                ratio_data_ptrs[d] = ratio_data[d].data();
+              ierr = DBPutMrgvar(metafile.get(), levelrationame.c_str(),
+                                 mrgtree_name.c_str(), 2, compname_ptrs.data(),
+                                 nlevels, regionname_ptrs.data(), DB_INT,
+                                 ratio_data_ptrs.data(), nullptr);
               assert(!ierr);
             }
-          }
 
-          {
-            const std::string levelrationame =
-                multimeshname + "_wmrgtree_lvlRatios";
-            const std::vector<std::string> compnames{"iRatio", "jRatio"};
-            std::vector<const char *> compname_ptrs;
-            compname_ptrs.reserve(compnames.size());
-            for (const auto &n : compnames)
-              compname_ptrs.push_back(n.c_str());
-            const std::vector<std::string> regionnames{"@level%d@n"};
-            std::vector<const char *> regionname_ptrs;
-            regionname_ptrs.reserve(regionnames.size());
-            for (const auto &n : regionnames)
-              regionname_ptrs.push_back(n.c_str());
-            std::array<std::vector<int>, 2> ratio_data;
-            for (int d = 0; d < 2; ++d)
-              ratio_data[d].push_back(2);
-            std::array<const void *, 2> ratio_data_ptrs;
-            for (int d = 0; d < 2; ++d)
-              ratio_data_ptrs[d] = ratio_data[d].data();
-            ierr = DBPutMrgvar(metafile.get(), levelrationame.c_str(),
-                               "mrgTree", 2, compname_ptrs.data(), nlevels,
-                               regionname_ptrs.data(), DB_INT,
-                               ratio_data_ptrs.data(), nullptr);
-            assert(!ierr);
-          }
+            {
+              const std::string iextentsname =
+                  multimeshname + "_wmrgtree_ijkExts";
+              const std::string extentsname =
+                  multimeshname + "_wmrgtree_xyzExts";
+              const std::vector<std::string> icompnames{"iMin", "iMax", "jMin",
+                                                        "jMax"};
+              const char *a_name = (axis_a == 0)   ? "x"
+                                   : (axis_a == 1) ? "y"
+                                                   : "z";
+              const char *b_name = (axis_b == 0)   ? "x"
+                                   : (axis_b == 1) ? "y"
+                                                   : "z";
+              const std::vector<std::string> compnames{
+                  std::string(a_name) + "Min", std::string(a_name) + "Max",
+                  std::string(b_name) + "Min", std::string(b_name) + "Max"};
+              std::vector<const char *> icompname_ptrs;
+              std::vector<const char *> compname_ptrs;
+              icompname_ptrs.reserve(icompnames.size());
+              compname_ptrs.reserve(compnames.size());
+              for (const auto &n : icompnames)
+                icompname_ptrs.push_back(n.c_str());
+              for (const auto &n : compnames)
+                compname_ptrs.push_back(n.c_str());
+              const std::vector<std::string> regionnames{"@patch%d@n"};
+              std::vector<const char *> regionname_ptrs;
+              regionname_ptrs.reserve(regionnames.size());
+              for (const auto &n : regionnames)
+                regionname_ptrs.push_back(n.c_str());
 
-          {
-            const std::string iextentsname =
-                multimeshname + "_wmrgtree_ijkExts";
-            const std::string extentsname = multimeshname + "_wmrgtree_xyzExts";
-            const std::vector<std::string> icompnames{"iMin", "iMax", "jMin",
-                                                      "jMax"};
-            const char *a_name = (axis_a == 0)   ? "x"
-                                 : (axis_a == 1) ? "y"
-                                                 : "z";
-            const char *b_name = (axis_b == 0)   ? "x"
-                                 : (axis_b == 1) ? "y"
-                                                 : "z";
-            const std::vector<std::string> compnames{
-                std::string(a_name) + "Min", std::string(a_name) + "Max",
-                std::string(b_name) + "Min", std::string(b_name) + "Max"};
-            std::vector<const char *> icompname_ptrs;
-            std::vector<const char *> compname_ptrs;
-            icompname_ptrs.reserve(icompnames.size());
-            compname_ptrs.reserve(compnames.size());
-            for (const auto &n : icompnames)
-              icompname_ptrs.push_back(n.c_str());
-            for (const auto &n : compnames)
-              compname_ptrs.push_back(n.c_str());
-            const std::vector<std::string> regionnames{"@patch%d@n"};
-            std::vector<const char *> regionname_ptrs;
-            regionname_ptrs.reserve(regionnames.size());
-            for (const auto &n : regionnames)
-              regionname_ptrs.push_back(n.c_str());
-
-            std::array<std::array<std::vector<int>, 2>, 2> idata;
-            std::array<std::array<std::vector<CCTK_REAL>, 2>, 2> rdata;
-            for (int d = 0; d < 2; ++d)
-              for (int f = 0; f < 2; ++f) {
-                idata[d][f].reserve(ncomps_total);
-                rdata[d][f].reserve(ncomps_total);
-              }
-            for (const auto &s : slabs)
-              for (int d = 0; d < 2; ++d) {
-                idata[d][0].push_back(s.ilo[d]);
-                idata[d][1].push_back(s.ihi[d]);
-                rdata[d][0].push_back(s.xlo[d]);
-                rdata[d][1].push_back(s.xhi[d]);
-              }
-            std::array<std::array<const void *, 2>, 2> idata_ptrs;
-            std::array<std::array<const void *, 2>, 2> rdata_ptrs;
-            for (int d = 0; d < 2; ++d)
-              for (int f = 0; f < 2; ++f) {
-                idata_ptrs[d][f] = idata[d][f].data();
-                rdata_ptrs[d][f] = rdata[d][f].data();
-              }
-            ierr = DBPutMrgvar(metafile.get(), iextentsname.c_str(), "mrgTree",
-                               2 * 2, icompname_ptrs.data(), ncomps_total,
-                               regionname_ptrs.data(), DB_INT,
-                               idata_ptrs.data(), nullptr);
-            assert(!ierr);
-            ierr = DBPutMrgvar(metafile.get(), extentsname.c_str(), "mrgTree",
-                               2 * 2, compname_ptrs.data(), ncomps_total,
-                               regionname_ptrs.data(), db_datatype_v<CCTK_REAL>,
-                               rdata_ptrs.data(), nullptr);
-            assert(!ierr);
-            const std::vector<int> ranks(ncomps_total, 2);
-            const std::vector<const void *> rank_ptrs{ranks.data()};
-            ierr = DBPutMrgvar(metafile.get(), "rank", "mrgTree", 1, nullptr,
-                               ncomps_total, regionname_ptrs.data(), DB_INT,
-                               rank_ptrs.data(), nullptr);
-            assert(!ierr);
-          }
+              std::array<std::array<std::vector<int>, 2>, 2> idata;
+              std::array<std::array<std::vector<CCTK_REAL>, 2>, 2> rdata;
+              for (int d = 0; d < 2; ++d)
+                for (int f = 0; f < 2; ++f) {
+                  idata[d][f].reserve(ncomps_total);
+                  rdata[d][f].reserve(ncomps_total);
+                }
+              for (const auto &s : slabs)
+                for (int d = 0; d < 2; ++d) {
+                  idata[d][0].push_back(s.ilo[d]);
+                  idata[d][1].push_back(s.ihi[d]);
+                  rdata[d][0].push_back(s.xlo[d]);
+                  rdata[d][1].push_back(s.xhi[d]);
+                }
+              std::array<std::array<const void *, 2>, 2> idata_ptrs;
+              std::array<std::array<const void *, 2>, 2> rdata_ptrs;
+              for (int d = 0; d < 2; ++d)
+                for (int f = 0; f < 2; ++f) {
+                  idata_ptrs[d][f] = idata[d][f].data();
+                  rdata_ptrs[d][f] = rdata[d][f].data();
+                }
+              ierr = DBPutMrgvar(
+                  metafile.get(), iextentsname.c_str(), mrgtree_name.c_str(),
+                  2 * 2, icompname_ptrs.data(), ncomps_total,
+                  regionname_ptrs.data(), DB_INT, idata_ptrs.data(), nullptr);
+              assert(!ierr);
+              ierr = DBPutMrgvar(
+                  metafile.get(), extentsname.c_str(), mrgtree_name.c_str(),
+                  2 * 2, compname_ptrs.data(), ncomps_total,
+                  regionname_ptrs.data(), db_datatype_v<CCTK_REAL>,
+                  rdata_ptrs.data(), nullptr);
+              assert(!ierr);
+              const std::vector<int> ranks(ncomps_total, 2);
+              const std::vector<const void *> rank_ptrs{ranks.data()};
+              ierr =
+                  DBPutMrgvar(metafile.get(), "rank", mrgtree_name.c_str(), 1,
+                              nullptr, ncomps_total, regionname_ptrs.data(),
+                              DB_INT, rank_ptrs.data(), nullptr);
+              assert(!ierr);
+            }
+          } // if (emit_amr)
 
           std::vector<const char *> meshname_ptrs;
           meshname_ptrs.reserve(meshnames.size());
@@ -913,10 +948,13 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               DBAddOption(optlist.get(), DBOPT_ZONECOUNTS, zonecounts.data());
           assert(!ierr);
 
-          const std::string mrgtreename = "mrgTree";
-          ierr = DBAddOption(optlist.get(), DBOPT_MRGTREE_NAME,
-                             const_cast<char *>(mrgtreename.c_str()));
-          assert(!ierr);
+          // Only point the multimesh at the mrgtree when one was actually
+          // written (see emit_amr above); otherwise this is a plain multimesh.
+          if (emit_amr) {
+            ierr = DBAddOption(optlist.get(), DBOPT_MRGTREE_NAME,
+                               const_cast<char *>(mrgtree_name.c_str()));
+            assert(!ierr);
+          }
 
           ierr = DBPutMultimesh(metafile.get(), multimeshname.c_str(),
                                 int(meshname_ptrs.size()), meshname_ptrs.data(),

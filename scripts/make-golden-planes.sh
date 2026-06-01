@@ -101,12 +101,17 @@ make_one() {
     done
   fi
   shopt -u nullglob
+  # Drop ADIOS2 run-timing profiling dumps: machine/run-specific, change on
+  # every regeneration, and not read by the verifier (it uses md.idx/data/md/mmd).
+  find "$dest" -name profiling.json -delete
   echo "  wrote $(find "$dest" -type f | wc -l) files ($(du -sh "$dest" | cut -f1)) to $dest"
 }
 
 make_one planes-single-level
 make_one planes-amr
+make_one planes-amr-midlevel
 make_one planes-edge-cases
+make_one planes-int-tags
 
 echo "================================================================"
 echo "Done. Review the new files, then:"

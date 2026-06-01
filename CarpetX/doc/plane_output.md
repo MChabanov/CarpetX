@@ -51,13 +51,33 @@ openPMD:
 - **Silo** includes ghost cells (`DBOPT_LO/HI_OFFSET` markers); the metafile
   carries an AMR `DBmrgtree` (`amr_decomp/levels/patches` + `lvlRatios`/
   `ijkExts`/`xyzExts`/`rank` mrgvars) so VisIt shadows coarse data with finer
-  levels where they overlap.
+  levels where they overlap. The mrgtree (and the multimesh's
+  `DBOPT_MRGTREE_NAME`) is written **only when at least one coarse→fine
+  parent-child relationship exists** (`emit_amr` in `io_silo_planes.cxx`);
+  single-level output, or a plane that crosses only one level, is a plain
+  multimesh — see *mrgtree pitfalls* below.
 - **openPMD** is interior-only (ghosts stripped), MPI-collective `storeChunk`,
   one 2D mesh per (group, patch, level); cell-centring via per-component
   `setPosition`. Each iteration also carries AMR-hierarchy attributes
   (`numPatches`, `patchSuffixes`, per-(patch,level) `chunkInfo`/`iteration_*`)
   and plane keys `planeTag`/`planeNormalAxis`/`planeElevation`. Empty
   `chunkInfo` is omitted (a zero-length attribute is unreadable by openpmd-api).
+  A `(patch, level, group)` whose boxes don't reach the plane is skipped
+  entirely (no mesh record): `snap_to_grid_index` only checks the level's full
+  refined domain, so a finer level can pass it without actually covering the
+  plane, and defining a mesh with no stored chunk makes openpmd-api emit "No
+  extent found" read warnings. The skip uses the replicated BoxArray so all
+  ranks agree (mesh creation is collective).
+
+  **Cell-centred dataset extent.** A mesh's extent is the *vertex* count
+  (`ncells+1`) per in-plane axis for every centering (same `+1+1` as the 3D
+  writer); a cell-centred variable writes only `ncells`, leaving the high-edge
+  index as backend fill. Harmless internally — writer `storeChunk` and the
+  readers (`available_chunks()`; the 3D recovery reader's `count = box.shape()`)
+  address data per-box, never the fill index — but an external full-extent
+  reader would see a one-cell fill stripe. Sizing per centering would fix it but
+  changes every dataset shape (golden + checkpoints), so it is left as is. Silo
+  has no analogue (a zone-centred quadvar is `N` zones on an `N+1`-node mesh).
 
 ## Viewing in VisIt
 
@@ -67,6 +87,43 @@ can be written as HDF5 (`CarpetX::openpmd_format = "HDF5"` → `.h5`; nothing in
 the writer prevents it, as long as the linked openPMD-api has the HDF5
 backend), but direct VisIt plotting of openPMD requires VisIt's openPMD reader
 plugin, which is not in every stock build — so Silo is the reliable VisIt path.
+
+### mrgtree pitfalls (empty child map; 3D name mismatch)
+
+The Silo AMR `DBmrgtree` has two sharp edges, both found while debugging a VisIt
+`SIGSEGV` (`avtSiloFileFormat::GetMesh` → `DBFreeGroupelmap` → `cfree`) on
+single-level plane output.
+
+1. **All-empty child map crashes VisIt.** The child map (`_wmrgtree_chldMaps`,
+   a `DBPutGroupelmap`) has one segment per component listing that component's
+   finer-level children. With only one level — or a plane that intersects a
+   single level — *every* segment is empty. Silo then stores no segment-data
+   array; on read-back `segment_data == NULL` while `num_segments > 0`, so VisIt
+   dereferences a NULL array when freeing the map and crashes. The numeric test
+   never sees this: `plane_readers/silo_reader.py` reads the leaf per-box
+   `.silo` files directly and never opens the metafile multimesh or walks the
+   mrgtree, so CI stays green while VisIt dies. **Fix applied:** the plane writer
+   emits the mrgtree only when `total_children > 0`, else a plain multimesh
+   (`emit_amr`, `io_silo_planes.cxx`).
+
+2. **The 3D writer (`io_silo.cxx`) hides the same hazard behind a bug.** It names
+   the mrgtree object `"mrgTree"` (`DBPutMrgtree`) but sets the multimesh's
+   `DBOPT_MRGTREE_NAME` to `"mrgtree"` — a case mismatch. Silo/HDF5 names are
+   case-sensitive, so VisIt's `DBGetMrgtree` lookup fails, the tree is silently
+   ignored, and the multimesh is read as plain. That is why single-level 3D Silo
+   output opens fine while the (correctly-wired) plane output crashed. The cost
+   is that **3D AMR Silo output has never actually received the intended mrgtree
+   level-shadowing in VisIt** — the feature is dead code on the read side.
+
+   *Future fix:* align the two names in `io_silo.cxx` so VisIt loads the 3D
+   mrgtree — but this **must** land together with the same `emit_amr`/`nlevels >
+   1` guard as the plane writer, otherwise single-level 3D output will start
+   crashing exactly as the planes did. Consider factoring the shared mrgtree
+   construction (group maps, region arrays, ratio/extent mrgvars, the
+   `total_children > 0` guard) out of both writers so the two paths cannot drift
+   again. A cheaper CI safety net: have the verifier also open the metafile
+   multimesh (not just the leaf files) so a tree VisIt would reject fails the
+   test.
 
 ## Testing (thorn `TestPlanes`)
 
