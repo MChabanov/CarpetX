@@ -1,44 +1,12 @@
 # 2D Plane Output for Silo and openPMD
 
-Axis-aligned 2D slabs (xy / xz / yz) at chosen elevations, written
-through the existing Silo and openPMD code paths. File-per-plane,
-AMR-aware (per-level snap), Cartesian patches only.
-
-## Status
-
-- **Commit 1**: shared infrastructure — parameters, spec parsing,
-  tag formatting, per-level grid snap, 3D-FAB slab extraction.
-- **Commit 2**: Silo writer for non-staggered (rank-0 all-VC and
-  rank-3 all-CC) groups; dispatch wired in `io.cxx::OutputGH`;
-  smoke-test parfile under `TestOutput`.
-- **Commit 3**: Silo per-group-mesh path for rank-1 / rank-2
-  staggered groups. All 3D indextypes now handled; mesh sharing key
-  extended with an in-plane centering tag so per-group meshes don't
-  collide with the shared mesh. Avoids the `assert(0)` at
-  `io_silo.cxx:1118`.
-- **Commit 4**: openPMD writer (`OutputOpenPMDPlanes`). Per-plane
-  local `openPMD::Series` (file-per-plane via the `it%08T` template),
-  per-(group, patch, level) 2D mesh, per-component `storeChunk` with
-  shared_ptr aliasing. Cell-centring encoded via `setPosition` per
-  axis (no per-group-mesh dichotomy needed). Interior-only data,
-  matching the existing 3D openPMD convention.
-- **Commit 5**: Silo plane writer now emits a full AMR `DBmrgtree`
-  alongside the multimesh (levelmaps + childmaps, `lvlRatios` /
-  `ijkExts` / `xyzExts` / `rank` mrgvars, plus `DBOPT_EXTENTS` /
-  `DBOPT_ZONECOUNTS` / `DBOPT_MRGTREE_NAME` on the multimesh). VisIt
-  now shadows coarse-level data with finer levels where they
-  overlap, instead of overlaying all levels. Slab enumeration is
-  level-major to match the 3D writer's ordering convention; child
-  relationships use 2D in-plane box refine-by-2 and overlap test.
-- **Commit 6 (this commit)**: openPMD plane writer now writes
-  per-iteration AMR-hierarchy attributes mirroring the 3D openPMD
-  writer: `numDims` / `numPatches` / `patchSuffixes`, per-patch
-  `numLevels` / `levelSuffixes`, per-(patch, level) `chunkInfo`
-  (2D bounds of intersecting FABs, reversed for openPMD C order) and
-  `iteration_num` / `iteration_den`. Plus plane-specific attributes
-  `planeTag`, `planeNormalAxis`, `planeElevation` so readers can
-  identify each plane slab. Intersection is computed in world
-  coordinates (indextype-agnostic).
+Axis-aligned 2D slabs (xy / xz / yz) at chosen world-coordinate elevations,
+written through the Silo and openPMD code paths. File-per-plane, AMR-aware
+(per-level snap), Cartesian patches only. Implemented in
+`CarpetX/src/io_planes.{hxx,cxx}` (spec parsing, tag formatting, per-level
+snap, 3D-FAB slab extraction), `io_silo_planes.{hxx,cxx}` (`OutputSiloPlanes`),
+and `io_openpmd.{hxx,cxx}` (`OutputOpenPMDPlanes`); dispatched from
+`io.cxx::OutputGH`.
 
 ## Parameters
 
@@ -51,175 +19,122 @@ AMR-aware (per-level snap), Cartesian patches only.
 | `out_planes_int_precision` | `4` | Min integer digits in tag |
 | `out_planes_frac_precision` | `3` | Fractional digits in tag |
 
-Spec syntax: `<axes>:<elevation>`, comma-separated. `<elevation>` is
-world-coordinate along the normal axis (z, y, or x).
+Spec syntax: `<axes>:<elevation>`, comma-separated; `<elevation>` is the
+world coordinate along the normal axis.
 
-## Tag format
+## Snapping & tags
 
-`<plane>_<axis>_<sign><int>p<frac>` — e.g. `xy_z_pos0012p500` for
-z=+12.500, `xz_y_neg0003p000` for y=−3.000. Survives Silo's
-`legalize_name` and HDF5 / ADIOS2 identifier rules. Mesh names get
-an extra 2-char in-plane centering suffix (`cv` / `vc`) when the
-per-group mesh path is used for in-plane rank-1 staggered groups;
-rank-0 / rank-2 groups omit the suffix and share a mesh.
+Elevations are rounded to `frac_precision` digits at parse (one-time warning on
+overflow); the rounded value is both the tag and the snap target. Per level,
+snap to the nearest vertex (VC: `x0 + i·dx`) or cell centre (CC: `x0 +
+(i+½)·dx`). A plane outside every Cartesian (patch, level) along its normal —
+or a non-Cartesian patch — is skipped with a one-time warning and **no file is
+written**.
 
-## Snapping
-
-Elevations are rounded to `frac_precision` digits at parse (warning
-fires once per unique spec on precision overflow). The rounded value
-is both the tag content and the snap target. Per level, snap to the
-nearest vertex (VC: `x0 + i·dx`) or cell center (CC: `x0 + (i+½)·dx`).
-A plane whose elevation lies outside every Cartesian (patch, level) along
-the normal axis produces a one-time warning and is skipped entirely: no
-output file (Silo or openPMD) is written for it. Non-Cartesian patches are
-likewise skipped.
+Tag: `<plane>_<axis>_<sign><int>p<frac>`, e.g. `xy_z_pos0012p500` (z=+12.5),
+`xz_y_neg0003p000` (y=−3). Survives Silo `legalize_name` and HDF5/ADIOS2 rules.
+Silo mesh names get a 2-char in-plane centering suffix (`cv`/`vc`) for rank-1
+staggered groups (per-group mesh); rank-0/2 groups share a mesh (no suffix).
 
 ## Output files
 
-Per plane: one data file per ioproc plus a metafile (Silo) or one
-file per iteration (openPMD), under per-iteration subdirectories:
-
 ```
 Silo:
-  <out_dir>/<sim>.<plane_tag>.it<...>.silo_planes.dir/
-      <sim>.<plane_tag>.it<...>.p<6-digit-ioproc>.silo
-  <out_dir>/<sim>.<plane_tag>.it<...>.silo               metafile
-  <out_dir>/<sim>.<plane_tag>.silo_planes.visit          VisIt index
-
+  <out_dir>/<sim>.<tag>.it<N>.silo_planes.dir/<sim>.<tag>.it<N>.p<NNNNNN>.silo
+  <out_dir>/<sim>.<tag>.it<N>.silo            metafile (multimesh/var + DBmrgtree)
+  <out_dir>/<sim>.<tag>.silo_planes.visit     VisIt index
 openPMD:
-  <out_dir>/<sim>.<plane_tag>.it<...>.<ext>              one per iteration
-  <out_dir>/<sim>.<plane_tag>.openpmd.visit              VisIt index
+  <out_dir>/<sim>.<tag>.it<N>.<ext>           one file per iteration (.bp5/.h5/…)
+  <out_dir>/<sim>.<tag>.openpmd.visit         VisIt index
 ```
 
-Silo metafile holds `DBPutMultimesh` / `DBPutMultivar` references to
-all per-block 2D quadmeshes/quadvars, plus a `DBmrgtree` with
-`amr_decomp/levels/patches` regions and `lvlRatios` / `ijkExts` /
-`xyzExts` / `rank` mrgvars. VisIt uses the mrgtree to shadow
-coarse-level data with finer levels where they overlap.
+- **Silo** includes ghost cells (`DBOPT_LO/HI_OFFSET` markers); the metafile
+  carries an AMR `DBmrgtree` (`amr_decomp/levels/patches` + `lvlRatios`/
+  `ijkExts`/`xyzExts`/`rank` mrgvars) so VisIt shadows coarse data with finer
+  levels where they overlap.
+- **openPMD** is interior-only (ghosts stripped), MPI-collective `storeChunk`,
+  one 2D mesh per (group, patch, level); cell-centring via per-component
+  `setPosition`. Each iteration also carries AMR-hierarchy attributes
+  (`numPatches`, `patchSuffixes`, per-(patch,level) `chunkInfo`/`iteration_*`)
+  and plane keys `planeTag`/`planeNormalAxis`/`planeElevation`. Empty
+  `chunkInfo` is omitted (a zero-length attribute is unreadable by openpmd-api).
 
-openPMD output uses MPI-collective `storeChunk`; cell-centring is
-encoded per-component via `setPosition({0.5, 0.5})` (etc.) and the
-mesh extent is the level's vertex grid along the two in-plane axes.
-Data is interior-only (ghosts stripped), matching the existing 3D
-openPMD output convention; Silo plane data includes ghost cells with
-`DBOPT_LO_OFFSET` / `HI_OFFSET` markers, matching its 3D counterpart.
+## Viewing in VisIt
 
-Each openPMD iteration also carries AMR-hierarchy attributes
-(`numPatches`, `patchSuffixes`, per-patch `numLevels<suffix>` and
-`levelSuffixes<suffix>`, per-(patch, level) `chunkInfo<suffix>` /
-`iteration_num<suffix>` / `iteration_den<suffix>`), plus
-plane-specific keys `planeTag`, `planeNormalAxis`, `planeElevation`.
-Downstream tools can reconstruct which FABs contributed to which
-slab without re-running the snap logic.
+VisIt reads **Silo** natively: open the `.silo_planes.visit` index and
+pseudocolor — the mrgtree gives correct AMR level shadowing. openPMD output
+can be written as HDF5 (`CarpetX::openpmd_format = "HDF5"` → `.h5`; nothing in
+the writer prevents it, as long as the linked openPMD-api has the HDF5
+backend), but direct VisIt plotting of openPMD requires VisIt's openPMD reader
+plugin, which is not in every stock build — so Silo is the reliable VisIt path.
 
-## File layout
+## Testing (thorn `TestPlanes`)
 
-```
-CarpetX/src/io_planes.{hxx,cxx}        spec parsing, tag formatting,
-                                       per-level snap, slab extraction
-CarpetX/src/io_silo_planes.{hxx,cxx}   OutputSiloPlanes; shared mesh
-                                       for in-plane rank-0/2, per-group
-                                       mesh for rank-1 staggered groups
-CarpetX/src/io_openpmd.{hxx,cxx}       OutputOpenPMDPlanes; per-plane
-                                       Series, per-(group,patch,level)
-                                       2D Mesh, setPosition for centring
-CarpetX/src/io.cxx                     dispatch (silo & openpmd planes)
-CarpetX/param.ccl                      8 new parameters
-CarpetX/src/make.code.defn             io_planes.cxx, io_silo_planes.cxx
-TestOutput/test/output-silo-planes.par     smoke-test (Silo)
-TestOutput/test/output-openpmd-planes.par  smoke-test (openPMD)
-```
+`TestPlanes` is a rigorous, CI-integrated test suite. It declares one grid
+function per index-type centering (the eight V/C combinations) and fills each,
+on the interior, with the same analytic axis-distinct field
 
-## Testing
+    f(x, y, z) = x + 100 y + 10000 z
 
-Thorn `TestPlanes` provides a rigorous, CI-integrated test suite for the plane
-writers. It declares one grid function per index-type centering (the eight V/C
-combinations: vertex `gf000`, cell `gf111`, the three face- and three
-edge-centred variants) and fills each with the same analytic, axis-distinct
-field
+via `WRITES interior` + `SYNC` at `initial` and `postregrid`. Because `f` is
+linear and `CCTK_INITIAL` re-runs on every level, each level's interior holds
+`f` exactly (independent of prolongation); interior+SYNC (not "everywhere")
+also keeps validity tracking consistent so the poison check after
+`MakeNewLevelFromCoarse` doesn't fire on not-yet-synced ghosts. The distinct
+decade weights make any axis swap/transpose visible.
 
-```
-f(x, y, z) = x + 100 y + 10000 z
-```
-
-evaluated at the grid function's own centering-dependent world coordinate. The
-interior is set directly (writes interior, then SYNC) at `initial` and
-`postregrid`, and `CCTK_INITIAL` re-runs on every level, so each level's
-interior holds `f` exactly -- independent of prolongation -- which is the data
-the openPMD writer emits and the numeric check uses. Writing interior + SYNC
-(not "everywhere") also keeps validity tracking consistent with a freshly
-regridded level, so the poison check after `MakeNewLevelFromCoarse` does not
-fire on not-yet-synced ghosts. The distinct decade weights make an axis swap or
-transpose immediately visible.
-
-Parfiles (`TestPlanes/test/`):
-
-| Parfile | Coverage |
+| Parfile (`TestPlanes/test/`) | Coverage |
 |---|---|
-| `planes-single-level.par` | uniform grid; xy/xz/yz principal planes + one offset per direction; all 8 centerings; Silo + openPMD |
-| `planes-amr.par` | 3-level AMR (refined cube about the centre); every plane crosses every level (per-level snap, Silo mrgtree shadowing, openPMD per-(patch,level) attributes) |
-| `planes-edge-cases.par` | half-integer / negative / over-precise elevations, and an out-of-domain elevation that must be skipped |
+| `planes-single-level.par` | uniform grid; 3 principal planes + 1 offset/axis; all 8 centerings; both writers |
+| `planes-amr.par` | 3-level AMR (refined cube); every plane crosses every level (per-level snap, mrgtree shadowing, openPMD AMR attrs) |
+| `planes-edge-cases.par` | half-integer / negative / over-precise / out-of-domain elevations |
 
-The grid is deliberately small and uses a distinct cell count and a distinct,
-non-zero origin per axis (`16×20×24` cells, `x∈[-4,12]`, `y∈[-2,18]`,
-`z∈[-6,18]`, `dx=1`): the distinct sizes make a transposed in-plane axis a
-shape/value mismatch, and the non-zero origins catch `ProbLo == 0` assumptions.
-The AMR run refines a half-width-4 cube about the centre `(4,8,6)` over three
-levels (so the cell-centred normal coordinate differs per level, e.g. `6.0` on
-the coarse level vs `6.125` on the finest).
+The grid is small with a **distinct cell count and non-zero origin per axis**
+(`16×20×24`, `x∈[-4,12]`, `y∈[-2,18]`, `z∈[-6,18]`, `dx=1`): distinct sizes
+turn an in-plane transpose into a shape/value mismatch and the offsets catch
+`ProbLo==0` bugs. `max_grid_size=8`/`blocking_factor=2` force several boxes,
+and the single-level + AMR cases run on **2 ranks**, exercising the Silo MPI
+gather / multi-file metafile and openPMD collective writes. The AMR cube uses
+`ddf` prolongation with the poison guard left on.
 
-Verification (`TestPlanes/test/verify_planes.py`) reads the written plane files
-back and asserts that every stored value equals `f` at the point's
-reconstructed world coordinate. The two coordinate sources are deliberately
-independent: in-plane coordinates come from each file's own mesh metadata
-(catching wrong `gridSpacing`/offset/`position`/centering), while the
-normal-axis coordinate is obtained by independently replaying
-`snap_to_grid_index` from the parfile geometry (catching a wrong slice).
+`verify_planes.py` checks, for every emitted value, that it equals `f` at the
+point's reconstructed coordinate — in-plane coords from the file's own mesh
+metadata, the normal coord from an independent replay of `snap_to_grid_index`
+(so neither can mask the other) — plus **coarse-level coverage** (the interior
+points must tile the whole domain plane → catches silently dropped data) and
+that out-of-domain planes produced **no** file. Reading is isolated in the
+reusable, geometry-free `TestPlanes/test/plane_readers/` package (one kernel
+per format, returning a uniform `Slab` list); `verify_planes.py` owns only the
+parfile/geometry and comparison logic.
 
-On top of the analytic check there is a golden-reference regression check.
-The golden reference is the committed *binary* plane output (`.bp5` + `.silo`)
-under `TestPlanes/test/golden/<parfile>/`, produced by
-`scripts/make-golden-planes.sh` on any machine that can run the executable
-(e.g. Frontier; no Python needed there). When that reference is present the
-verifier reads it back through the same readers and compares the data against
-the freshly produced output. The comparison is data-level (point coordinate ->
-value), so it is robust to differences in MPI decomposition or chunk layout
-between the machine that generated the reference and CI. A missing reference is
-a soft skip (the analytic check is the gate); a present one is enforced.
+Both writers are numerically verified. openPMD via `openpmd_api` (pip); Silo
+`.silo` (`DB_HDF5`) via the LLNL `Silo` module (apt `python3-silo`, not on
+PyPI): its `DBfile` has only `GetToc`/`GetVar`/`GetVarInfo`, so `GetVarInfo`
+gives each object's HDF5 component paths (`value0`, `coord0`/`coord1`),
+centering and interior range, and `h5py` reads the arrays (reshape `(nb,na)` —
+the buffer is axis_a-fastest, so trust the stride, not h5py's 2D shape). Only
+interior cells are checked (AMR coarse-fine ghosts are prolongation-filled, not
+exact `f`). Without the Silo module it degrades to a smoke check;
+`--silo-mode inspect` dumps the layout/API.
 
-Both writers' output is numerically verified. openPMD is read via `openpmd_api`
-(pip-installable). Silo `.silo` files (`DB_HDF5` driver) are read via the LLNL
-`Silo` Python module -- the `python3-silo` apt package, installed by
-`test-planes.sh`; it is not on PyPI. Its `DBfile` exposes only
-`GetToc`/`GetVar`/`GetVarInfo`, so `GetVarInfo(name)` supplies each object's
-HDF5 component dataset paths (`value0`; `coord0`/`coord1`) plus centering and
-the interior node range, and the arrays are read with `h5py`. Only the interior
-(non-ghost) cells are checked: Silo stores ghost cells, and at AMR coarse-fine
-boundaries those are prolongation-filled rather than exactly analytic. Where the
-Silo module is unavailable the path degrades to a structural smoke check (valid
-HDF5 + datasets present); `verify_planes.py --silo-mode inspect` dumps the
-on-disk layout/API.
+A **golden-reference regression** check sits on top: committed binary reference
+output under `TestPlanes/test/golden/<parfile>/`, generated by
+`scripts/make-golden-planes.sh` (runs only the executable — no Python — so it
+works on Frontier). Present golden is read back through the same reader and
+compared data-level (point→value, keyed on centering, so it is independent of
+MPI decomposition and of Silo's per-box variable names); absent golden is a
+soft skip. Only the small openPMD `.bp5` golden is committed; the (large)
+Silo golden is a stub — when committed it compares the same way.
 
-Beyond the per-point value check, the verifier also checks **coarse-level
-coverage**: the union of interior in-plane points on level 0 must tile the
-whole domain plane. This catches data that is silently *missing* rather than
-wrong -- the typical multi-rank failure mode (a rank's slab dropped, or a
-gather mismatch). The grids are forced into several boxes (`max_grid_size=8`,
-`blocking_factor=2`), and the single-level and AMR cases run on **two ranks**,
-so the Silo `MPI_Send`/`MPI_Recv` gather, the multi-file metafile, and the
-openPMD per-rank collective `storeChunk` are all exercised.
-
-CI runs `scripts/test-planes.sh` after the build (see
-`.github/workflows/ci.yml`), which executes the parfiles (single-level and AMR
-on two ranks) and runs the verifier. The same script runs in the local
-container loop via `agent_scripts/test.sh`. To (re)generate the golden
-reference output after an intentional change, run `scripts/make-golden-planes.sh`
-on a machine that can run the executable and commit `TestPlanes/test/golden/`.
+CI runs `scripts/test-planes.sh` after the build (`.github/workflows/ci.yml`;
+also via `agent_scripts/test.sh` locally): it pip-installs `openpmd-api`/`h5py`,
+apt-installs `python3-silo`, runs the parfiles, and verifies both writers. To
+regenerate golden after an intentional change, run `make-golden-planes.sh` and
+commit `TestPlanes/test/golden/`.
 
 ## Why Cartesian-only
 
-`CoordinatesX::vertex_coords` always stores world-space Cartesian
-(x, y, z) — even on spherical patches. So `z=12` is literal world-z,
-not "third logical coordinate = 12". Constant-z through a curvilinear
-patch is a curved sheet in index space, deferred to a future
+`CoordinatesX::vertex_coords` always stores world-space Cartesian (x,y,z), even
+on spherical patches — so `z=12` is literal world-z. A constant-z surface
+through a curvilinear patch is curved in index space, deferred to a future
 interpolation path.
