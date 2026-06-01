@@ -69,6 +69,16 @@ openPMD:
   extent found" read warnings. The skip uses the replicated BoxArray so all
   ranks agree (mesh creation is collective).
 
+  **Cell-centred dataset extent.** A mesh's extent is the *vertex* count
+  (`ncells+1`) per in-plane axis for every centering (same `+1+1` as the 3D
+  writer); a cell-centred variable writes only `ncells`, leaving the high-edge
+  index as backend fill. Harmless internally — writer `storeChunk` and the
+  readers (`available_chunks()`; the 3D recovery reader's `count = box.shape()`)
+  address data per-box, never the fill index — but an external full-extent
+  reader would see a one-cell fill stripe. Sizing per centering would fix it but
+  changes every dataset shape (golden + checkpoints), so it is left as is. Silo
+  has no analogue (a zone-centred quadvar is `N` zones on an `N+1`-node mesh).
+
 ## Viewing in VisIt
 
 VisIt reads **Silo** natively: open the `.silo_planes.visit` index and
