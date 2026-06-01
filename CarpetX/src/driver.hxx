@@ -25,6 +25,7 @@
 #include <memory>
 #include <optional>
 #include <ostream>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -35,9 +36,9 @@ using Loop::dim;
 
 using rat64 = rational<int64_t>;
 
-// Number of Runge-Kutta stages whose coarse-fine boundary bands are stored for
-// subcycling. Must match ODESolvers' compile-time rkstages (RK4-only).
-inline constexpr int rkstages = 4;
+// Compile-time capacity of the subcycling band arrays. The runtime-active
+// count lives in GHExt::num_rk_stages (RK4 uses 4, SSPRK3 uses 3).
+inline constexpr int max_num_rk_stages = 4;
 
 // TODO: It seems that AMReX now also has `RB90`, `RB180`, and
 // `PolarB` boundary conditions. Make these available as well.
@@ -477,9 +478,9 @@ struct GHExt {
         //   ks_consumer_band[s]: this level's own cf-ghost region, filled by
         //                        prolongation from the parent and read by the
         //                        dense-output kernel. Empty at level 0.
-        mutable std::array<std::unique_ptr<amrex::MultiFab>, rkstages>
+        mutable std::array<std::unique_ptr<amrex::MultiFab>, max_num_rk_stages>
             ks_source_band;
-        mutable std::array<std::unique_ptr<amrex::MultiFab>, rkstages>
+        mutable std::array<std::unique_ptr<amrex::MultiFab>, max_num_rk_stages>
             ks_consumer_band;
 
         // Coarse-fine boundary bands holding the subcycling old state u(t_n), a
@@ -545,6 +546,10 @@ struct GHExt {
 
   bool use_subcycling = false;
 
+  // Active number of RK stages for subcycling, set from ODESolvers::method at
+  // WRAGH (SSPRK3 -> 3, else 4). Must be <= max_num_rk_stages.
+  int num_rk_stages = 4;
+
   // Per-level iteration values read from checkpoint; consumed by recovery fixup
   // in schedule.cxx. Indexed [patch][level]. Empty outside of recovery window.
   std::vector<std::vector<std::optional<rat64> > > recovered_level_iterations;
@@ -581,6 +586,20 @@ struct GHExt {
 };
 
 extern std::unique_ptr<GHExt> ghext;
+
+// True iff every level of every patch sits at the same subcycling iteration,
+// i.e. the checkpoint is time-aligned. Always true without subcycling. When
+// false, the fine consumer bands hold mid-cycle state that must be serialized.
+bool all_levels_synchronized();
+
+// Subcycling consumer-band kinds serialized at unsynchronized checkpoints:
+// ks_consumer is the RK stages 0..max_num_rk_stages-1, old_consumer the u(t_n)
+// snapshot.
+enum class band_kind { ks_consumer, old_consumer };
+
+// Token identifying a consumer band in checkpoint names: "ksc_s00".."ksc_s03"
+// for ks_consumer, "oldc" for old_consumer. Shared by both IO backends.
+std::string subcycling_band_tag(band_kind kind, int stage = -1);
 
 } // namespace CarpetX
 

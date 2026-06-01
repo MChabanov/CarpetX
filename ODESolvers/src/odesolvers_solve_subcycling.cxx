@@ -9,7 +9,7 @@
 
 namespace ODESolvers {
 
-constexpr int rkstages = 4;
+constexpr int max_num_rk_stages = 4;
 
 namespace {
 
@@ -195,14 +195,20 @@ extern "C" void ODESolvers_Solve_Subcycling(CCTK_ARGUMENTS) {
 
       const auto &patchdata = ghext->patchdata.at(leveldata.patch);
       const auto &prev_leveldata = patchdata.leveldata.at(level - 1);
+      // Virtual end-of-step stage = num_rk_stages + 1 (RK4 -> 5, SSPRK3 -> 4).
+      const int virtual_end = ghext->num_rk_stages + 1;
       CCTK_REAL xsi =
           (leveldata.iteration == prev_leveldata.iteration) ? 0.5 : 0.0;
-      if (stage == 5) {
+      if (stage == virtual_end) {
         xsi += 0.5;
       }
-      const int stage0 = (stage == 5 ? 1 : stage);
-      Subcycling::CalcYfFromKcs_MFlevel<rkstages>(
-          leveldata, var_groups, /*Yf_tl=*/0, dt * 2, xsi, stage0);
+      const int stage0 = (stage == virtual_end ? 1 : stage);
+      if (ghext->num_rk_stages == 3)
+        Subcycling::CalcYfFromKcs_MFlevel<3>(leveldata, var_groups, /*Yf_tl=*/0,
+                                             dt * 2, xsi, stage0);
+      else
+        Subcycling::CalcYfFromKcs_MFlevel<4>(leveldata, var_groups, /*Yf_tl=*/0,
+                                             dt * 2, xsi, stage0);
     });
     synchronize();
     var.set_valid(make_valid_all());
@@ -278,7 +284,7 @@ extern "C" void ODESolvers_Solve_Subcycling(CCTK_ARGUMENTS) {
         const auto &coarsegroupdata =
             *coarseleveldata.groupdata.at(var_groups[i]);
         amrex::Interpolater *const interpolator = groupdata.interpolator;
-        for (int s = 0; s < rkstages; ++s) {
+        for (int s = 0; s < max_num_rk_stages; ++s) {
           // Skip where either band is absent (level 0 has no consumer band, the
           // finest level no source band).
           if (!groupdata.ks_consumer_band[s] ||
@@ -367,6 +373,51 @@ extern "C" void ODESolvers_Solve_Subcycling(CCTK_ARGUMENTS) {
     // subcycling-aware POSTRESTRICT SYNCs. The post-recovery case is handled
     // by ODESolvers_Solve_Subcycling_Recovery at CCTK_CPINITIAL.
 
+  } else if (CCTK_EQUALS(method, "SSPRK3")) {
+
+    // k1 = f(y0)
+    // k2 = f(y0 + h k1)
+    // k3 = f(y0 + h/4 k1 + h/4 k2)
+    // y1 = y0 + h/6 k1 + h/6 k2 + 2/3 h k3
+
+    assert(ghext->num_rk_stages == 3);
+
+    // Scratch copy of u(t_n) = var(tl=0), the SSPRK3 interior anchor y0.
+    const auto old = var.copy(make_valid_all());
+
+    // Capture u(t_n) into the old bands before the RK stages overwrite var,
+    // then prolongate the parent's bands (old + k-stage) into this level's
+    // consumer bands.
+    if (var_groups.size() > 0) {
+      fill_old_source_band();
+      prolongate_bands();
+    }
+
+    // k1 = f(Y1)
+    calcrhs(1);
+    setks(1); // interior only
+    const auto k1 = rhs.copy(make_valid_int());
+    calcupdate(1, dt, 1.0, reals<1>{dt}, states<1>{&rhs}); // var = y0 + dt*k1
+    calcys_rmbnd(2); // refinement boundary only
+    calcpoststep();
+
+    // k2 = f(Y2)
+    calcrhs(2);
+    setks(2); // interior only
+    const auto k2 = rhs.copy(make_valid_int());
+    calcupdate(2, dt / 2, 0.0, reals<3>{1.0, dt / 4, dt / 4},
+               states<3>{&old, &k1, &k2});
+    calcys_rmbnd(3); // refinement boundary only
+    calcpoststep();
+
+    // k3 = f(Y3)
+    calcrhs(3);
+    setks(3); // interior only
+    calcupdate(3, dt, 0.0, reals<4>{1.0, dt / 6, dt / 6, 2 * dt / 3},
+               states<4>{&old, &k1, &k2, &rhs});
+    calcys_rmbnd(4); // virtual end-of-step (num_rk_stages + 1)
+    calcpoststep();
+
   } else {
     assert(0);
   }
@@ -392,11 +443,14 @@ extern "C" void ODESolvers_Solve_Subcycling_Recovery(CCTK_ARGUMENTS) {
     return;
 
   if (verbose)
-    CCTK_VINFO("Subcycling recovery: refilling refinement-boundary ghosts via "
-               "tl=0 spatial prolongation after checkpoint recovery");
+    CCTK_VINFO("Subcycling recovery: refilling refinement-boundary ghosts "
+               "(spatial prolongation on time-aligned levels, dense output "
+               "from restored consumer bands otherwise)");
 
   static Timer timer("ODESolvers::Solve_Subcycling_Recovery");
   Interval interval(timer);
+
+  const CCTK_REAL dt = CCTK_DELTA_TIME;
 
   auto setup = collect_solve_setup();
   auto &var = setup.var;
@@ -404,16 +458,54 @@ extern "C" void ODESolvers_Solve_Subcycling_Recovery(CCTK_ARGUMENTS) {
   if (setup.nvars == 0)
     return;
 
-  // Checkpoints are only written when all levels are time-aligned, so a
-  // recovered fine level needs only spatial tl=0 prolongation to refill its
-  // refinement-boundary ghosts -- no dense output, no k-stage bands (which are
-  // unserialized and not allocated outside evolution).
+  // Refill each recovered fine level's refinement-boundary (cf) ghosts.
+  // Synchronized levels (and old/synchronized checkpoints with no restored band
+  // data) use spatial tl=0 prolongation. Unsynchronized levels carry mid-cycle
+  // dense-output state in their restored consumer bands and reconstruct the
+  // cf-ghosts the uninterrupted run's previous fine substep last wrote.
   if (var_groups.size() > 0) {
     var.check_valid(make_valid_int(),
                     "ODESolvers_Solve_Subcycling_Recovery requires the tl=0 "
                     "interior to be populated by checkpoint recovery");
+
+    // Spatial prolongation fills every fine level's cf-ghosts; the
+    // unsynchronized levels below are then overwritten with dense output.
     SyncGroupsByDirIProlongateOnly(cctkGH, var_groups.size(), var_groups.data(),
                                    nullptr, /*tl=*/0);
+
+    active_levels->loop_coarse_to_fine([&](auto &restrict leveldata) {
+      const int level = leveldata.level;
+      if (level == 0)
+        return;
+      const auto &patchdata = ghext->patchdata.at(leveldata.patch);
+      const auto &prev_leveldata = patchdata.leveldata.at(level - 1);
+      // Time-aligned with the parent: spatial prolongation above is correct.
+      if (leveldata.iteration == prev_leveldata.iteration)
+        return;
+      // Reconstruct only where restored consumer-band data is present (a band
+      // rebuilt but never read falls back to the spatial path).
+      bool have_bands = false;
+      for (const int gi : var_groups) {
+        const auto &groupdata = *leveldata.groupdata.at(gi);
+        if (groupdata.ks_consumer_band[0] &&
+            !groupdata.ks_consumer_band[0]->empty()) {
+          have_bands = true;
+          break;
+        }
+      }
+      if (!have_bands)
+        return;
+      // Mirror the previous fine substep's calcys_rmbnd at the virtual
+      // end-of-step: base offset 0.0 plus the +0.5 give xsi = 0.5, stage0 = 1,
+      // dtc = dt*2.
+      const CCTK_REAL xsi = 0.5;
+      if (ghext->num_rk_stages == 3)
+        Subcycling::CalcYfFromKcs_MFlevel<3>(leveldata, var_groups, /*Yf_tl=*/0,
+                                             dt * 2, xsi, /*stage0=*/1);
+      else
+        Subcycling::CalcYfFromKcs_MFlevel<4>(leveldata, var_groups, /*Yf_tl=*/0,
+                                             dt * 2, xsi, /*stage0=*/1);
+    });
     synchronize();
     var.set_valid(make_valid_all());
   }
