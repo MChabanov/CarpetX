@@ -469,12 +469,21 @@ void OutputSiloPlanes(const cGH *const cctkGH,
       }
     }
 
-    if (!any_slab_emitted) {
-      const std::string key = plane.tag;
-      if (warned_outside_domain.insert(key).second)
+    // The geometric pre-check above already wrote no file for a plane outside
+    // every level, so reaching here means the plane is in domain. Since
+    // any_slab_emitted is per-rank, a rank that owns no intersecting box
+    // legitimately emits nothing; only warn if NO rank emitted anything (a real
+    // inconsistency), and only from the metafile rank to avoid duplicates.
+    {
+      int local_emitted = any_slab_emitted ? 1 : 0;
+      int global_emitted = 0;
+      MPI_Allreduce(&local_emitted, &global_emitted, 1, MPI_INT, MPI_LOR,
+                    mpi_comm);
+      if (!global_emitted && write_metafile &&
+          warned_outside_domain.insert(plane.tag).second)
         CCTK_VWARN(CCTK_WARN_ALERT,
-                   "OutputSiloPlanes: plane %s lies outside all Cartesian "
-                   "(patch, level) extents on this iteration",
+                   "OutputSiloPlanes: plane %s produced no data on any rank "
+                   "this iteration",
                    plane.tag.c_str());
     }
 
@@ -639,6 +648,10 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               multimeshname + "_wmrgtree_lvlMaps";
           const std::string childmaps_name =
               multimeshname + "_wmrgtree_chldMaps";
+          // Per-multimesh tree name: one metafile holds several multimeshes
+          // (one per centering), so a shared "mrgTree" would be overwritten and
+          // the earlier multimeshes would reference another centering's maps.
+          const std::string mrgtree_name = multimeshname + "_mrgTree";
 
           // Map each component to its finer-level children. The AMR mrgtree is
           // emitted only when some parent->child relationship exists: otherwise
@@ -789,8 +802,9 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                 ierr = DBAddOption(mt_optlist.get(), DBOPT_MRGV_ONAMES,
                                    mrgv_oname_ptrs.data());
                 assert(!ierr);
-                ierr = DBPutMrgtree(metafile.get(), "mrgTree", "amr_mesh",
-                                    mrgtree.get(), mt_optlist.get());
+                ierr =
+                    DBPutMrgtree(metafile.get(), mrgtree_name.c_str(),
+                                 "amr_mesh", mrgtree.get(), mt_optlist.get());
                 assert(!ierr);
               }
             }
@@ -808,15 +822,19 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               regionname_ptrs.reserve(regionnames.size());
               for (const auto &n : regionnames)
                 regionname_ptrs.push_back(n.c_str());
+              // One ratio value per region (= per level): DBPutMrgvar reads
+              // nlevels values from each component pointer, so the buffer must
+              // hold nlevels entries (every level refines by 2). A single entry
+              // would make Silo read past the end for nlevels > 1.
               std::array<std::vector<int>, 2> ratio_data;
               for (int d = 0; d < 2; ++d)
-                ratio_data[d].push_back(2);
+                ratio_data[d].assign(nlevels, 2);
               std::array<const void *, 2> ratio_data_ptrs;
               for (int d = 0; d < 2; ++d)
                 ratio_data_ptrs[d] = ratio_data[d].data();
               ierr = DBPutMrgvar(metafile.get(), levelrationame.c_str(),
-                                 "mrgTree", 2, compname_ptrs.data(), nlevels,
-                                 regionname_ptrs.data(), DB_INT,
+                                 mrgtree_name.c_str(), 2, compname_ptrs.data(),
+                                 nlevels, regionname_ptrs.data(), DB_INT,
                                  ratio_data_ptrs.data(), nullptr);
               assert(!ierr);
             }
@@ -872,21 +890,23 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                   idata_ptrs[d][f] = idata[d][f].data();
                   rdata_ptrs[d][f] = rdata[d][f].data();
                 }
-              ierr = DBPutMrgvar(metafile.get(), iextentsname.c_str(),
-                                 "mrgTree", 2 * 2, icompname_ptrs.data(),
-                                 ncomps_total, regionname_ptrs.data(), DB_INT,
-                                 idata_ptrs.data(), nullptr);
+              ierr = DBPutMrgvar(
+                  metafile.get(), iextentsname.c_str(), mrgtree_name.c_str(),
+                  2 * 2, icompname_ptrs.data(), ncomps_total,
+                  regionname_ptrs.data(), DB_INT, idata_ptrs.data(), nullptr);
               assert(!ierr);
               ierr = DBPutMrgvar(
-                  metafile.get(), extentsname.c_str(), "mrgTree", 2 * 2,
-                  compname_ptrs.data(), ncomps_total, regionname_ptrs.data(),
-                  db_datatype_v<CCTK_REAL>, rdata_ptrs.data(), nullptr);
+                  metafile.get(), extentsname.c_str(), mrgtree_name.c_str(),
+                  2 * 2, compname_ptrs.data(), ncomps_total,
+                  regionname_ptrs.data(), db_datatype_v<CCTK_REAL>,
+                  rdata_ptrs.data(), nullptr);
               assert(!ierr);
               const std::vector<int> ranks(ncomps_total, 2);
               const std::vector<const void *> rank_ptrs{ranks.data()};
-              ierr = DBPutMrgvar(metafile.get(), "rank", "mrgTree", 1, nullptr,
-                                 ncomps_total, regionname_ptrs.data(), DB_INT,
-                                 rank_ptrs.data(), nullptr);
+              ierr =
+                  DBPutMrgvar(metafile.get(), "rank", mrgtree_name.c_str(), 1,
+                              nullptr, ncomps_total, regionname_ptrs.data(),
+                              DB_INT, rank_ptrs.data(), nullptr);
               assert(!ierr);
             }
           } // if (emit_amr)
@@ -931,9 +951,8 @@ void OutputSiloPlanes(const cGH *const cctkGH,
           // Only point the multimesh at the mrgtree when one was actually
           // written (see emit_amr above); otherwise this is a plain multimesh.
           if (emit_amr) {
-            const std::string mrgtreename = "mrgTree";
             ierr = DBAddOption(optlist.get(), DBOPT_MRGTREE_NAME,
-                               const_cast<char *>(mrgtreename.c_str()));
+                               const_cast<char *>(mrgtree_name.c_str()));
             assert(!ierr);
           }
 

@@ -2588,11 +2588,21 @@ void carpetx_openpmd_t::OutputOpenPMDPlanes(
       }
     }
 
-    if (!any_slab_emitted) {
-      if (warned_outside_domain.insert(plane.tag).second)
+    // The geometric pre-check above already wrote no file for a plane outside
+    // every level, so reaching here means the plane is in domain. Since
+    // any_slab_emitted is per-rank, a rank that owns no intersecting box
+    // legitimately emits nothing; only warn if NO rank emitted anything (a real
+    // inconsistency), and only from the I/O rank to avoid duplicates.
+    {
+      int local_emitted = any_slab_emitted ? 1 : 0;
+      int global_emitted = 0;
+      MPI_Allreduce(&local_emitted, &global_emitted, 1, MPI_INT, MPI_LOR,
+                    MPI_COMM_WORLD);
+      if (!global_emitted && myproc == ioproc &&
+          warned_outside_domain.insert(plane.tag).second)
         CCTK_VWARN(CCTK_WARN_ALERT,
-                   "OutputOpenPMDPlanes: plane %s lies outside all "
-                   "Cartesian (patch, level) extents on this iteration",
+                   "OutputOpenPMDPlanes: plane %s produced no data on any rank "
+                   "this iteration",
                    plane.tag.c_str());
     }
 
