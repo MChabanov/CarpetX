@@ -1177,7 +1177,7 @@ void carpetx_openpmd_t::InputOpenPMD(const cGH *const cctkGH,
                                                      start, count);
 #endif
                 } // for vi
-              } // for local_component
+              }   // for local_component
             };
 
             for (int s = 0; s < max_num_rk_stages; ++s)
@@ -1880,8 +1880,8 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
                                                       count);
                 }
               } // for vi
-            } // for local_component
-          } // for tl
+            }   // for local_component
+          }     // for tl
 
           // Subcycling consumer bands: zero-ghost MultiFabs in this level's
           // index space, so they share the level's idomain frame and dataset
@@ -1964,7 +1964,7 @@ void carpetx_openpmd_t::OutputOpenPMD(const cGH *const cctkGH,
                                                       start, count);
 #endif
                 } // for vi
-              } // for local_component
+              }   // for local_component
             };
 
             for (int s = 0; s < max_num_rk_stages; ++s)
@@ -2469,6 +2469,25 @@ void carpetx_openpmd_t::OutputOpenPMDPlanes(
 
           const int slice_idx = snap_to_grid_index(plane, geom, indextype);
           if (slice_idx < 0)
+            continue;
+
+          // snap_to_grid_index only checks the level's full (refined) domain,
+          // so a finer level whose boxes don't actually reach the plane still
+          // passes. Skip such a (patch, level, group) entirely: defining an
+          // openPMD mesh with no stored chunk makes openpmd-api emit "No extent
+          // found" read warnings (the mesh has no data). The BoxArray is
+          // replicated on every rank, so all ranks agree -- safe since mesh
+          // creation is collective. This mirrors the empty-chunkInfo guard.
+          bool level_intersects = false;
+          for (int c = 0, nc = mfab.size(); c < nc; ++c) {
+            const amrex::Box &b = mfab.box(c); // interior box
+            if (slice_idx >= b.smallEnd(plane.normal_axis) &&
+                slice_idx <= b.bigEnd(plane.normal_axis)) {
+              level_intersects = true;
+              break;
+            }
+          }
+          if (!level_intersects)
             continue;
 
           const bool cv_a = indextype.cellCentered(axis_a);

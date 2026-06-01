@@ -62,6 +62,12 @@ openPMD:
   (`numPatches`, `patchSuffixes`, per-(patch,level) `chunkInfo`/`iteration_*`)
   and plane keys `planeTag`/`planeNormalAxis`/`planeElevation`. Empty
   `chunkInfo` is omitted (a zero-length attribute is unreadable by openpmd-api).
+  A `(patch, level, group)` whose boxes don't reach the plane is skipped
+  entirely (no mesh record): `snap_to_grid_index` only checks the level's full
+  refined domain, so a finer level can pass it without actually covering the
+  plane, and defining a mesh with no stored chunk makes openpmd-api emit "No
+  extent found" read warnings. The skip uses the replicated BoxArray so all
+  ranks agree (mesh creation is collective).
 
 ## Viewing in VisIt
 
