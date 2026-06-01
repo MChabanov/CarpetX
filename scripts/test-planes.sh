@@ -116,6 +116,7 @@ run_and_verify planes-single-level 2
 run_and_verify planes-amr 2
 run_and_verify planes-amr-midlevel 2
 run_and_verify planes-edge-cases 1
+run_and_verify planes-int-tags 1
 
 echo "================================================================"
 echo "✓ plane verification passed"

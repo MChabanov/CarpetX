@@ -111,6 +111,7 @@ make_one planes-single-level
 make_one planes-amr
 make_one planes-amr-midlevel
 make_one planes-edge-cases
+make_one planes-int-tags
 
 echo "================================================================"
 echo "Done. Review the new files, then:"
