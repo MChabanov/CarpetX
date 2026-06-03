@@ -8,6 +8,7 @@
 
 #include <CactusBase/IOUtil/src/ioutil_CheckpointRecovery.h>
 #include <cctk.h>
+#include <cctk_Parameters.h>
 #include <util_Network.h>
 
 #ifdef HAVE_CAPABILITY_openPMD_api

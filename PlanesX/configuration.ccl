@@ -2,6 +2,10 @@
 
 REQUIRES AMReX CarpetX IOUtil MPI
 
+OPTIONAL ADIOS2
+{
+}
+
 OPTIONAL openPMD_api
 {
 }
