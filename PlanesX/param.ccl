@@ -60,3 +60,5 @@ SHARES: IO
 
 USES STRING out_dir
 USES CCTK_INT out_every
+USES KEYWORD out_mode
+USES CCTK_INT out_proc_every

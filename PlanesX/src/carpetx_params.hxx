@@ -15,7 +15,8 @@ namespace PlanesX {
 inline CCTK_INT get_carpetx_int_param(const char *const name) {
   int type;
   const void *const ptr = CCTK_ParameterGet(name, "CarpetX", &type);
-  assert(ptr);
+  if (!ptr)
+    CCTK_VERROR("Parameter CarpetX::%s not found (renamed upstream?)", name);
   assert(type == PARAMETER_INT);
   return *static_cast<const CCTK_INT *>(ptr);
 }
@@ -23,7 +24,8 @@ inline CCTK_INT get_carpetx_int_param(const char *const name) {
 inline const char *get_carpetx_string_param(const char *const name) {
   int type;
   const void *const ptr = CCTK_ParameterGet(name, "CarpetX", &type);
-  assert(ptr);
+  if (!ptr)
+    CCTK_VERROR("Parameter CarpetX::%s not found (renamed upstream?)", name);
   assert(type == PARAMETER_STRING || type == PARAMETER_KEYWORD);
   return *static_cast<const char *const *>(ptr);
 }

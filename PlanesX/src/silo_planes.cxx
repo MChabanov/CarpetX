@@ -159,12 +159,14 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                       const std::vector<plane_spec_t> &planes,
                       const std::string &output_dir,
                       const std::string &output_file) {
+  // out_mode and out_proc_every are IO:: parameters shared into PlanesX's
+  // param.ccl (CarpetX shares them the same way).
+  DECLARE_CCTK_PARAMETERS;
+
   const int cctk_iteration = cctkGH->cctk_iteration;
   const CCTK_REAL cctk_time = cctkGH->cctk_time;
 
-  // CarpetX's (private) Silo output parameters; PlanesX follows them.
-  const char *const out_mode = get_carpetx_string_param("out_mode");
-  const CCTK_INT out_proc_every = get_carpetx_int_param("out_proc_every");
+  // CarpetX's (private) Silo compression parameter; PlanesX follows it.
   const char *const out_silo_compression_options =
       get_carpetx_string_param("out_silo_compression_options");
 
