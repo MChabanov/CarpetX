@@ -4,7 +4,7 @@
 #include "silo_planes.hxx"
 
 #include <cctk.h>
-#include <cctk_Arguments.h>
+#include <cctk_IOMethods.h>
 #include <cctk_Parameters.h>
 
 #include <cassert>
@@ -67,9 +67,15 @@ std::string get_simulation_name() {
 
 } // namespace
 
-extern "C" void PlanesX_Output(CCTK_ARGUMENTS) {
-  DECLARE_CCTK_ARGUMENTS;
+// IO-method callback: called from CarpetX::OutputGH (which traverses the
+// IO methods registered via CCTK_RegisterIOMethod), i.e. after the
+// CCTK_ANALYSIS traversal -- analysis-bin grid functions are up to date --
+// and before CarpetX's OutputMeta, so the plane files registered via
+// OutputMeta_RegisterOutputFile land in the same iteration's metadata.
+int PlanesX_OutputGH(const cGH *const cctkGH) {
   DECLARE_CCTK_PARAMETERS;
+
+  const int cctk_iteration = cctkGH->cctk_iteration;
 
   {
     const int carpetx_openpmd_every =
@@ -114,6 +120,18 @@ extern "C" void PlanesX_Output(CCTK_ARGUMENTS) {
 #endif
     }
   }
+
+  // TODO: This should be the number of variables output
+  return 0;
 }
 
 } // namespace PlanesX
+
+extern "C" int PlanesX_Startup() {
+  const int handle = CCTK_RegisterIOMethod("PlanesX");
+  assert(handle >= 0);
+  const int ierr =
+      CCTK_RegisterIOMethodOutputGH(handle, PlanesX::PlanesX_OutputGH);
+  assert(!ierr);
+  return 0;
+}

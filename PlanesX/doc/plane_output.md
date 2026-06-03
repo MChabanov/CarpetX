@@ -6,17 +6,25 @@ written through the Silo and openPMD code paths. File-per-plane, AMR-aware
 `PlanesX/src/planes.{hxx,cxx}` (spec parsing, tag formatting, per-level
 snap, 3D-FAB slab extraction), `silo_planes.{hxx,cxx}` (`OutputSiloPlanes`),
 and `openpmd_planes.{hxx,cxx}` (`OutputOpenPMDPlanes`); dispatched from
-`output.cxx::PlanesX_Output`, scheduled `AT poststep` (`OPTIONS: global`).
+`output.cxx::PlanesX_OutputGH`, an IO method registered at `STARTUP` via
+`CCTK_RegisterIOMethod`.
 
 PlanesX was extracted from CarpetX (it originally lived in
 `CarpetX/src/io_planes.*` and was dispatched from `io.cxx::OutputGH`).
-CarpetX's `OutputGH` overloads `CCTK_OutputGH` and does not traverse
-registered IO methods, so the thorn hooks in via a scheduled routine instead:
-CarpetX traverses `CCTK_POSTSTEP` on every iteration — including the recovery
-iteration, where `CCTK_ANALYSIS` is skipped — immediately before calling
-`CCTK_OutputGH`. Files registered via `OutputMeta_RegisterOutputFile` are
-still described by CarpetX's `OutputMeta` (end of its `OutputGH`) in the same
-iteration. The writers read CarpetX's grid hierarchy directly (`ghext` via the
+CarpetX's `OutputGH` overloads `CCTK_OutputGH`; it now ends by traversing the
+IO methods registered via `CCTK_RegisterIOMethod` (CarpetX commit "call
+registered IO methods from OutputGH" — **required**: without it the callback
+is never invoked and no planes are written). That restores the exact
+pre-extraction slot: after the `CCTK_POSTSTEP` *and* `CCTK_ANALYSIS`
+traversals — so grid functions computed in the analysis bin (energies,
+constraints, errors) are up to date when the planes are written — on every
+iteration including recovery (where `CCTK_ANALYSIS` itself is skipped), and
+before CarpetX's `OutputMeta`, so files registered via
+`OutputMeta_RegisterOutputFile` are described in the same iteration's
+metadata. (An earlier revision hooked in at `CCTK_POSTSTEP`, which runs
+*before* the analysis bin and would have output analysis-computed grid
+functions one iteration stale.) The writers read CarpetX's grid hierarchy
+directly (`ghext` via the
 exported `driver.hxx`), and follow CarpetX's private output parameters
 (`out_mode`, `out_proc_every`, `out_silo_compression_options`,
 `openpmd_format`, cadence fallbacks) via `CCTK_ParameterGet`
