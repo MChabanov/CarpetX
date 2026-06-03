@@ -1,0 +1,62 @@
+# Parameter definitions for thorn PlanesX
+
+BOOLEAN verbose "Verbose output" STEERABLE=always
+{
+} no
+
+
+
+STRING openpmd_plane_vars "Variables to output as 2d axis-aligned planes in openPMD format" STEERABLE=always
+{
+  ".*" :: ""
+} ""
+
+STRING openpmd_planes "Plane specs for openPMD 2d output, e.g. 'xy:0.0, xy:10.0, xz:0.0'" STEERABLE=always
+{
+  ".*" :: ""
+} ""
+
+INT openpmd_planes_every "Output openPMD plane data every that many iterations" STEERABLE=always
+{
+  -1 :: "use value of CarpetX::out_openpmd_every"
+  0 :: "never output openPMD planes"
+  1:* :: "every that many iterations"
+} -1
+
+
+
+STRING silo_plane_vars "Variables to output as 2d axis-aligned planes in Silo format" STEERABLE=always
+{
+  ".*" :: ""
+} ""
+
+STRING silo_planes "Plane specs for Silo 2d output, e.g. 'xy:0.0, xy:10.0, xz:0.0'" STEERABLE=always
+{
+  ".*" :: ""
+} ""
+
+INT silo_planes_every "Output Silo plane data every that many iterations" STEERABLE=always
+{
+  -1 :: "use value of CarpetX::out_silo_every"
+  0 :: "never output Silo planes"
+  1:* :: "every that many iterations"
+} -1
+
+
+
+INT planes_int_precision "Minimum number of integer digits in plane-elevation tag (zero-padded)" STEERABLE=always
+{
+  1:8 :: "minimum integer digits"
+} 4
+
+INT planes_frac_precision "Number of fractional digits in plane-elevation tag" STEERABLE=always
+{
+  0:8 :: "fractional digits"
+} 3
+
+
+
+SHARES: IO
+
+USES STRING out_dir
+USES CCTK_INT out_every

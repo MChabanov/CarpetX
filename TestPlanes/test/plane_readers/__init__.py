@@ -1,4 +1,4 @@
-"""Reusable readers for CarpetX 2D-plane output.
+"""Reusable readers for PlanesX 2D-plane output.
 
 Each reader turns one writer's plane files into a uniform list of `Slab`s and is
 independent of the test geometry and of the other writer:

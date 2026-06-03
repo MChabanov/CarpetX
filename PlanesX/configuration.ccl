@@ -1,0 +1,11 @@
+# Configuration definitions for thorn PlanesX
+
+REQUIRES AMReX CarpetX IOUtil MPI
+
+OPTIONAL openPMD_api
+{
+}
+
+OPTIONAL Silo
+{
+}

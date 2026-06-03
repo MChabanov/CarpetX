@@ -10,13 +10,14 @@
 ## coarsest level (level 0): no coarse->fine parent-child relationship exists for
 ## it, so the Silo metafile must fall back to a plain multimesh (no mrgtree) --
 ## a single-level AMR child map is all-empty and crashes VisIt's DBFreeGroupelmap
-## (see CarpetX/doc/plane_output.md). This case verifies that the mrgtree guard
+## (see PlanesX/doc/plane_output.md). This case verifies that the mrgtree guard
 ## keys on the actual child count, not just max_num_levels>1. Because TestPlanes
 ## re-applies the analytic field at initial and postregrid, every level holds f
 ## exactly, independent of prolongation.
 
 ActiveThorns = "
     CarpetX
+    PlanesX
     IOUtil
     TestPlanes
 "
@@ -89,7 +90,7 @@ CarpetX::out_metadata = no
 # centre) plus one offset per direction (all inside the refined cube, so they
 # cross every level), plus xy:14.0 which is inside the domain but above the cube
 # and so intersects only the coarsest level (plain-multimesh / no-mrgtree path).
-CarpetX::out_silo_plane_vars = "
+PlanesX::silo_plane_vars = "
     TestPlanes::gf000
     TestPlanes::gf001
     TestPlanes::gf010
@@ -99,10 +100,10 @@ CarpetX::out_silo_plane_vars = "
     TestPlanes::gf110
     TestPlanes::gf111
 "
-CarpetX::out_silo_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0, xy:14.0"
-CarpetX::out_silo_planes_every = 1
+PlanesX::silo_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0, xy:14.0"
+PlanesX::silo_planes_every = 1
 
-CarpetX::out_openpmd_plane_vars = "
+PlanesX::openpmd_plane_vars = "
     TestPlanes::gf000
     TestPlanes::gf001
     TestPlanes::gf010
@@ -112,8 +113,8 @@ CarpetX::out_openpmd_plane_vars = "
     TestPlanes::gf110
     TestPlanes::gf111
 "
-CarpetX::out_openpmd_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0, xy:14.0"
-CarpetX::out_openpmd_planes_every = 1
+PlanesX::openpmd_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0, xy:14.0"
+PlanesX::openpmd_planes_every = 1
 
-CarpetX::out_planes_int_precision = 4
-CarpetX::out_planes_frac_precision = 3
+PlanesX::planes_int_precision = 4
+PlanesX::planes_frac_precision = 3

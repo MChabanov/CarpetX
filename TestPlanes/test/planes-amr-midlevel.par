@@ -22,13 +22,14 @@
 ##                  level the reader must tolerate.
 ##   xy:14.0 (z=14) inside the domain but above level 1 -> level 0 only, no
 ##                  parent-child relationship, so the Silo metafile falls back to
-##                  a plain multimesh (no mrgtree); see CarpetX/doc/plane_output.md.
+##                  a plain multimesh (no mrgtree); see PlanesX/doc/plane_output.md.
 ##
 ## Because TestPlanes re-applies the analytic field at initial and postregrid,
 ## every level holds f exactly, independent of prolongation.
 
 ActiveThorns = "
     CarpetX
+    PlanesX
     IOUtil
     TestPlanes
 "
@@ -100,7 +101,7 @@ CarpetX::out_metadata = no
 # Three xy planes spanning the three level-crossing regimes (see header):
 # all-levels (z=6), levels 0+1 only / not the finest (z=9), and level 0 only
 # (z=14). All eight centerings are written on each.
-CarpetX::out_silo_plane_vars = "
+PlanesX::silo_plane_vars = "
     TestPlanes::gf000
     TestPlanes::gf001
     TestPlanes::gf010
@@ -110,10 +111,10 @@ CarpetX::out_silo_plane_vars = "
     TestPlanes::gf110
     TestPlanes::gf111
 "
-CarpetX::out_silo_planes = "xy:6.0, xy:9.0, xy:14.0"
-CarpetX::out_silo_planes_every = 1
+PlanesX::silo_planes = "xy:6.0, xy:9.0, xy:14.0"
+PlanesX::silo_planes_every = 1
 
-CarpetX::out_openpmd_plane_vars = "
+PlanesX::openpmd_plane_vars = "
     TestPlanes::gf000
     TestPlanes::gf001
     TestPlanes::gf010
@@ -123,8 +124,8 @@ CarpetX::out_openpmd_plane_vars = "
     TestPlanes::gf110
     TestPlanes::gf111
 "
-CarpetX::out_openpmd_planes = "xy:6.0, xy:9.0, xy:14.0"
-CarpetX::out_openpmd_planes_every = 1
+PlanesX::openpmd_planes = "xy:6.0, xy:9.0, xy:14.0"
+PlanesX::openpmd_planes_every = 1
 
-CarpetX::out_planes_int_precision = 4
-CarpetX::out_planes_frac_precision = 3
+PlanesX::planes_int_precision = 4
+PlanesX::planes_frac_precision = 3

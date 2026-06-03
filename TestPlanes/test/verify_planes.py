@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify CarpetX 2D plane output (Silo and openPMD) for thorn TestPlanes.
+"""Verify PlanesX 2D plane output (Silo and openPMD) for thorn TestPlanes.
 
 Every grid function written by TestPlanes holds the analytic field
 
@@ -13,7 +13,7 @@ axis ordering and per-centering coordinates.
 
 In-plane coordinates come from each file's own mesh metadata (so a wrong
 gridSpacing/offset/position/centering is caught); the normal-axis coordinate is
-obtained by independently replaying CarpetX::snap_to_grid_index from the parfile
+obtained by independently replaying PlanesX::snap_to_grid_index from the parfile
 geometry (so a wrong slice is caught). The two are sourced differently so
 neither can mask a bug in the other. It also checks coarse-level coverage (the
 interior points must tile the whole domain plane -> catches silently dropped
@@ -68,8 +68,8 @@ class Geometry:
         self.xmin = [float(par["carpetx::%smin" % a]) for a in AXIS_NAMES]
         self.xmax = [float(par["carpetx::%smax" % a]) for a in AXIS_NAMES]
         self.max_num_levels = int(par.get("carpetx::max_num_levels", "1"))
-        self.int_precision = int(par.get("carpetx::out_planes_int_precision", "4"))
-        self.frac_precision = int(par.get("carpetx::out_planes_frac_precision", "3"))
+        self.int_precision = int(par.get("planesx::planes_int_precision", "4"))
+        self.frac_precision = int(par.get("planesx::planes_frac_precision", "3"))
 
     def dx(self, axis, level):
         return (self.xmax[axis] - self.xmin[axis]) / self.ncells[axis] / 2 ** level
@@ -81,7 +81,7 @@ class Geometry:
         return self.xmin[axis] <= elevation <= self.xmax[axis]
 
     def snap_coord(self, axis, level, cell_centered, elevation):
-        """Replay CarpetX::snap_to_grid_index; return the snapped slice's world
+        """Replay PlanesX::snap_to_grid_index; return the snapped slice's world
         coordinate, or None if the elevation is out of range."""
         x0 = self.xmin[axis]
         dx = self.dx(axis, level)

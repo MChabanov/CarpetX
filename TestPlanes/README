@@ -6,7 +6,7 @@ Licence      : LGPL
 
 1. Purpose
 
-Test thorn for CarpetX's 2D plane output (Silo and openPMD). It declares one
+Test thorn for PlanesX's 2D plane output (extracted from CarpetX) (Silo and openPMD). It declares one
 grid function per index-type centering (the eight V/C combinations) and fills
 each with the same analytic, axis-distinguishing field
 
@@ -25,4 +25,4 @@ stored value equals f to within tolerance -- a rigorous, reference-free check
 that the snap, slab extraction, axis ordering and per-centering coordinates
 are all correct.
 
-See CarpetX/doc/plane_output.md for the feature and test documentation.
+See PlanesX/doc/plane_output.md for the feature and test documentation.

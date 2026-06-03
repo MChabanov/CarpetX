@@ -1,14 +1,17 @@
-#include "io_silo_planes.hxx"
+#include "silo_planes.hxx"
+
+#include "carpetx_params.hxx"
+#include "planes.hxx"
 
 #include "driver.hxx"
-#include "io_meta.hxx"
-#include "io_planes.hxx"
-#include "mpi_types.hxx"
 #include "timer.hxx"
+// Not exported by CarpetX's interface.ccl; include via the arrangement path
+// (same idiom as the IOUtil header below).
+#include <CarpetX/CarpetX/src/io_meta.hxx>
+#include <CarpetX/CarpetX/src/mpi_types.hxx>
 
 #include <CactusBase/IOUtil/src/ioutil_CheckpointRecovery.h>
 #include <cctk.h>
-#include <cctk_Arguments.h>
 #include <cctk_Parameters.h>
 
 #ifdef HAVE_CAPABILITY_Silo
@@ -39,7 +42,8 @@
 #include <utility>
 #include <vector>
 
-namespace CarpetX {
+namespace PlanesX {
+using namespace CarpetX;
 
 namespace {
 
@@ -155,8 +159,14 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                       const std::vector<plane_spec_t> &planes,
                       const std::string &output_dir,
                       const std::string &output_file) {
-  DECLARE_CCTK_ARGUMENTS;
-  DECLARE_CCTK_PARAMETERS;
+  const int cctk_iteration = cctkGH->cctk_iteration;
+  const CCTK_REAL cctk_time = cctkGH->cctk_time;
+
+  // CarpetX's (private) Silo output parameters; PlanesX follows them.
+  const char *const out_mode = get_carpetx_string_param("out_mode");
+  const CCTK_INT out_proc_every = get_carpetx_int_param("out_proc_every");
+  const char *const out_silo_compression_options =
+      get_carpetx_string_param("out_silo_compression_options");
 
   int ierr;
 
@@ -176,7 +186,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
     if (CCTK_EQUALS(out_mode, "proc"))
       return 1;
     if (CCTK_EQUALS(out_mode, "np"))
-      return out_proc_every;
+      return int(out_proc_every);
     if (CCTK_EQUALS(out_mode, "onefile"))
       return nprocs;
     assert(0);
@@ -658,7 +668,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
           // (single level, or a plane crossing one level) the child map is all
           // empty, Silo stores no segment-data array, and VisIt crashes freeing
           // it (DBFreeGroupelmap on a NULL array). A non-AMR dataset is written
-          // as a plain multimesh. See CarpetX/doc/plane_output.md.
+          // as a plain multimesh. See PlanesX/doc/plane_output.md.
           std::vector<std::vector<int> > child_data(ncomps_total);
           for (int idx = 0; idx < ncomps_total; ++idx) {
             const auto &s = slabs[idx];
@@ -1035,6 +1045,6 @@ void OutputSiloPlanes(const cGH *const cctkGH,
   }
 }
 
-} // namespace CarpetX
+} // namespace PlanesX
 
 #endif // HAVE_CAPABILITY_Silo

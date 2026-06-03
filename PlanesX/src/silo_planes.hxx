@@ -1,7 +1,7 @@
-#ifndef CARPETX_CARPETX_IO_SILO_PLANES_HXX
-#define CARPETX_CARPETX_IO_SILO_PLANES_HXX
+#ifndef CARPETX_PLANESX_SILO_PLANES_HXX
+#define CARPETX_PLANESX_SILO_PLANES_HXX
 
-#include "io_planes.hxx"
+#include "planes.hxx"
 
 #include <cctk.h>
 
@@ -10,15 +10,15 @@
 #include <string>
 #include <vector>
 
-namespace CarpetX {
+namespace PlanesX {
 
 void OutputSiloPlanes(const cGH *cctkGH, const std::vector<bool> &output_group,
                       const std::vector<plane_spec_t> &planes,
                       const std::string &output_dir,
                       const std::string &output_file);
 
-} // namespace CarpetX
+} // namespace PlanesX
 
 #endif
 
-#endif // #ifndef CARPETX_CARPETX_IO_SILO_PLANES_HXX
+#endif // #ifndef CARPETX_PLANESX_SILO_PLANES_HXX

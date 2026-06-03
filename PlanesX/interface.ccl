@@ -1,0 +1,8 @@
+# Interface definition for thorn PlanesX
+
+IMPLEMENTS: PlanesX
+
+USES INCLUDE HEADER: silo.hxx
+
+USES INCLUDE HEADER: driver.hxx
+USES INCLUDE HEADER: timer.hxx

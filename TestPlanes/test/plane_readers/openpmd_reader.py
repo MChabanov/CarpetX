@@ -1,6 +1,6 @@
 """openPMD plane reader.
 
-Reads CarpetX 2D-plane openPMD output (ADIOS2 .bp/.bp4/.bp5 or HDF5 .h5) via
+Reads PlanesX 2D-plane openPMD output (ADIOS2 .bp/.bp4/.bp5 or HDF5 .h5) via
 openpmd_api and returns a list of `Slab`s. Interior-only data, matching the
 writer's convention. Geometry-free and reusable.
 """

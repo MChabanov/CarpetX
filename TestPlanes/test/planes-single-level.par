@@ -8,6 +8,7 @@
 
 ActiveThorns = "
     CarpetX
+    PlanesX
     IOUtil
     TestPlanes
 "
@@ -58,7 +59,7 @@ CarpetX::out_metadata = no
 
 # All eight centerings, written on the three principal planes (at the domain
 # centre) plus one offset per direction.
-CarpetX::out_silo_plane_vars = "
+PlanesX::silo_plane_vars = "
     TestPlanes::gf000
     TestPlanes::gf001
     TestPlanes::gf010
@@ -68,10 +69,10 @@ CarpetX::out_silo_plane_vars = "
     TestPlanes::gf110
     TestPlanes::gf111
 "
-CarpetX::out_silo_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0"
-CarpetX::out_silo_planes_every = 1
+PlanesX::silo_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0"
+PlanesX::silo_planes_every = 1
 
-CarpetX::out_openpmd_plane_vars = "
+PlanesX::openpmd_plane_vars = "
     TestPlanes::gf000
     TestPlanes::gf001
     TestPlanes::gf010
@@ -81,8 +82,8 @@ CarpetX::out_openpmd_plane_vars = "
     TestPlanes::gf110
     TestPlanes::gf111
 "
-CarpetX::out_openpmd_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0"
-CarpetX::out_openpmd_planes_every = 1
+PlanesX::openpmd_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0"
+PlanesX::openpmd_planes_every = 1
 
-CarpetX::out_planes_int_precision = 4
-CarpetX::out_planes_frac_precision = 3
+PlanesX::planes_int_precision = 4
+PlanesX::planes_frac_precision = 3

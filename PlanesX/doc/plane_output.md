@@ -1,23 +1,39 @@
-# 2D Plane Output for Silo and openPMD
+# 2D Plane Output for Silo and openPMD (thorn PlanesX)
 
 Axis-aligned 2D slabs (xy / xz / yz) at chosen world-coordinate elevations,
 written through the Silo and openPMD code paths. File-per-plane, AMR-aware
 (per-level snap), Cartesian patches only. Implemented in
-`CarpetX/src/io_planes.{hxx,cxx}` (spec parsing, tag formatting, per-level
-snap, 3D-FAB slab extraction), `io_silo_planes.{hxx,cxx}` (`OutputSiloPlanes`),
-and `io_openpmd.{hxx,cxx}` (`OutputOpenPMDPlanes`); dispatched from
-`io.cxx::OutputGH`.
+`PlanesX/src/planes.{hxx,cxx}` (spec parsing, tag formatting, per-level
+snap, 3D-FAB slab extraction), `silo_planes.{hxx,cxx}` (`OutputSiloPlanes`),
+and `openpmd_planes.{hxx,cxx}` (`OutputOpenPMDPlanes`); dispatched from
+`output.cxx::PlanesX_Output`, scheduled `AT poststep` (`OPTIONS: global`).
+
+PlanesX was extracted from CarpetX (it originally lived in
+`CarpetX/src/io_planes.*` and was dispatched from `io.cxx::OutputGH`).
+CarpetX's `OutputGH` overloads `CCTK_OutputGH` and does not traverse
+registered IO methods, so the thorn hooks in via a scheduled routine instead:
+CarpetX traverses `CCTK_POSTSTEP` on every iteration — including the recovery
+iteration, where `CCTK_ANALYSIS` is skipped — immediately before calling
+`CCTK_OutputGH`. Files registered via `OutputMeta_RegisterOutputFile` are
+still described by CarpetX's `OutputMeta` (end of its `OutputGH`) in the same
+iteration. The writers read CarpetX's grid hierarchy directly (`ghext` via the
+exported `driver.hxx`), and follow CarpetX's private output parameters
+(`out_mode`, `out_proc_every`, `out_silo_compression_options`,
+`openpmd_format`, cadence fallbacks) via `CCTK_ParameterGet`
+(`carpetx_params.hxx`); the small openPMD conventions (format mapping, ADIOS2
+options, iteration encoding, units, mesh/component naming) are mirrored from
+`io_openpmd.cxx` in `openpmd_planes.cxx`.
 
 ## Parameters
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `out_silo_planes` | `""` | Specs, e.g. `"xy:0.0, xy:10.0, xz:-5.0"` |
-| `out_silo_plane_vars` | `""` | Variable regex |
-| `out_silo_planes_every` | `-1` | Cadence (-1 ⇒ `out_silo_every`) |
-| `out_openpmd_planes` / `_plane_vars` / `_planes_every` | — | Same, for openPMD |
-| `out_planes_int_precision` | `4` | Min integer digits in tag |
-| `out_planes_frac_precision` | `3` | Fractional digits in tag |
+| `PlanesX::silo_planes` | `""` | Specs, e.g. `"xy:0.0, xy:10.0, xz:-5.0"` |
+| `PlanesX::silo_plane_vars` | `""` | Variable regex |
+| `PlanesX::silo_planes_every` | `-1` | Cadence (-1 ⇒ `CarpetX::out_silo_every` ⇒ `IO::out_every`) |
+| `PlanesX::openpmd_planes` / `_plane_vars` / `_planes_every` | — | Same, for openPMD |
+| `PlanesX::planes_int_precision` | `4` | Min integer digits in tag |
+| `PlanesX::planes_frac_precision` | `3` | Fractional digits in tag |
 
 Spec syntax: `<axes>:<elevation>`, comma-separated; `<elevation>` is the
 world coordinate along the normal axis.
@@ -53,7 +69,7 @@ openPMD:
   `ijkExts`/`xyzExts`/`rank` mrgvars) so VisIt shadows coarse data with finer
   levels where they overlap. The mrgtree (and the multimesh's
   `DBOPT_MRGTREE_NAME`) is written **only when at least one coarse→fine
-  parent-child relationship exists** (`emit_amr` in `io_silo_planes.cxx`);
+  parent-child relationship exists** (`emit_amr` in `silo_planes.cxx`);
   single-level output, or a plane that crosses only one level, is a plain
   multimesh — see *mrgtree pitfalls* below.
 - **openPMD** is interior-only (ghosts stripped), MPI-collective `storeChunk`,
@@ -104,16 +120,17 @@ single-level plane output.
    `.silo` files directly and never opens the metafile multimesh or walks the
    mrgtree, so CI stays green while VisIt dies. **Fix applied:** the plane writer
    emits the mrgtree only when `total_children > 0`, else a plain multimesh
-   (`emit_amr`, `io_silo_planes.cxx`).
+   (`emit_amr`, `silo_planes.cxx`).
 
-2. **The 3D writer (`io_silo.cxx`) hides the same hazard behind a bug.** It names
-   the mrgtree object `"mrgTree"` (`DBPutMrgtree`) but sets the multimesh's
-   `DBOPT_MRGTREE_NAME` to `"mrgtree"` — a case mismatch. Silo/HDF5 names are
-   case-sensitive, so VisIt's `DBGetMrgtree` lookup fails, the tree is silently
-   ignored, and the multimesh is read as plain. That is why single-level 3D Silo
-   output opens fine while the (correctly-wired) plane output crashed. The cost
-   is that **3D AMR Silo output has never actually received the intended mrgtree
-   level-shadowing in VisIt** — the feature is dead code on the read side.
+2. **CarpetX's 3D writer (`io_silo.cxx`) hides the same hazard behind a bug.**
+   It names the mrgtree object `"mrgTree"` (`DBPutMrgtree`) but sets the
+   multimesh's `DBOPT_MRGTREE_NAME` to `"mrgtree"` — a case mismatch. Silo/HDF5
+   names are case-sensitive, so VisIt's `DBGetMrgtree` lookup fails, the tree is
+   silently ignored, and the multimesh is read as plain. That is why
+   single-level 3D Silo output opens fine while the (correctly-wired) plane
+   output crashed. The cost is that **3D AMR Silo output has never actually
+   received the intended mrgtree level-shadowing in VisIt** — the feature is
+   dead code on the read side.
 
    *Future fix:* align the two names in `io_silo.cxx` so VisIt loads the 3D
    mrgtree — but this **must** land together with the same `emit_amr`/`nlevels >
@@ -144,7 +161,9 @@ decade weights make any axis swap/transpose visible.
 |---|---|
 | `planes-single-level.par` | uniform grid; 3 principal planes + 1 offset/axis; all 8 centerings; both writers |
 | `planes-amr.par` | 3-level AMR (refined cube); every plane crosses every level (per-level snap, mrgtree shadowing, openPMD AMR attrs) |
+| `planes-amr-midlevel.par` | nested 3-level AMR; planes crossing only a subset of levels |
 | `planes-edge-cases.par` | half-integer / negative / over-precise / out-of-domain elevations |
+| `planes-int-tags.par` | `planes_frac_precision = 0` integer tags; malformed specs |
 
 The grid is small with a **distinct cell count and non-zero origin per axis**
 (`16×20×24`, `x∈[-4,12]`, `y∈[-2,18]`, `z∈[-6,18]`, `dx=1`): distinct sizes
@@ -195,3 +214,11 @@ commit `TestPlanes/test/golden/`.
 on spherical patches — so `z=12` is literal world-z. A constant-z surface
 through a curvilinear patch is curved in index space, deferred to a future
 interpolation path.
+
+## Relation to CarpetX's own 2D output
+
+Upstream CarpetX (lwJi/dev) later grew an independent 2D slice capability
+(`CarpetX::out_silo_2d_*` / `out_openpmd_2d_*` with `IO::out_xyplane_z` etc.,
+`io_slice.hxx`). The two coexist: parameter names are disjoint, and PlanesX
+keeps the per-level snapping, arbitrary per-plane elevations, mrgtree
+shadowing and the TestPlanes verification described here.

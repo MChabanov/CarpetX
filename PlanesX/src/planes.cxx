@@ -1,4 +1,4 @@
-#include "io_planes.hxx"
+#include "planes.hxx"
 
 #include <cctk.h>
 
@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-namespace CarpetX {
+namespace PlanesX {
 
 namespace {
 
@@ -153,11 +153,11 @@ std::vector<plane_spec_t> parse_planes(const std::string &spec,
       if (std::abs(double(rounded - elev)) > tol)
         CCTK_VWARN(CCTK_WARN_ALERT,
                    "Plane elevation %.17g exceeds "
-                   "out_planes_frac_precision=%d digits; degraded to %.17g.",
+                   "planes_frac_precision=%d digits; degraded to %.17g.",
                    double(elev), frac_precision, double(rounded));
       if (total / scale > max_int)
         CCTK_VWARN(CCTK_WARN_ALERT,
-                   "Plane elevation %g exceeds out_planes_int_precision=%d "
+                   "Plane elevation %g exceeds planes_int_precision=%d "
                    "digits; tag field widens (lexicographic sort across "
                    "planes may not match numeric sort).",
                    double(rounded), int_precision);
@@ -265,4 +265,4 @@ amrex::Box extract_slab(const amrex::FArrayBox &fab, int normal_axis,
   return amrex::Box(lo, hi, box.ixType());
 }
 
-} // namespace CarpetX
+} // namespace PlanesX

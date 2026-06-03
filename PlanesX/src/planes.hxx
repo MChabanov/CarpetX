@@ -1,5 +1,5 @@
-#ifndef CARPETX_CARPETX_IO_PLANES_HXX
-#define CARPETX_CARPETX_IO_PLANES_HXX
+#ifndef CARPETX_PLANESX_PLANES_HXX
+#define CARPETX_PLANESX_PLANES_HXX
 
 #include <cctk.h>
 
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace CarpetX {
+namespace PlanesX {
 
 // normal_axis: 0 -> yz, 1 -> xz, 2 -> xy. elevation is already rounded
 // to frac_precision; tag is the filename/meshname fragment.
@@ -39,6 +39,6 @@ amrex::Box extract_slab(const amrex::FArrayBox &fab, int normal_axis,
                         int slice_idx, int numvars,
                         std::vector<CCTK_REAL> &out_buf);
 
-} // namespace CarpetX
+} // namespace PlanesX
 
-#endif // #ifndef CARPETX_CARPETX_IO_PLANES_HXX
+#endif // #ifndef CARPETX_PLANESX_PLANES_HXX

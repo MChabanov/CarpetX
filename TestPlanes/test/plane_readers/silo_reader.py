@@ -1,6 +1,6 @@
 """Silo plane reader.
 
-Reads CarpetX 2D-plane Silo output (DB_HDF5 driver) for numeric verification.
+Reads PlanesX 2D-plane Silo output (DB_HDF5 driver) for numeric verification.
 The LLNL `Silo` Python module (Debian `python3-silo`) exposes only
 Close/GetToc/GetVar/GetVarInfo; GetVarInfo(name) returns an object's metadata
 including the HDF5 dataset paths of its components (value0 for a quadvar;

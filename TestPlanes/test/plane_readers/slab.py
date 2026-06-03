@@ -35,7 +35,7 @@ class Slab:
 
 
 def in_plane_axes(normal_axis):
-    """(axis_a, axis_b) for a plane with the given normal, matching CarpetX's
+    """(axis_a, axis_b) for a plane with the given normal, matching PlanesX's
     in_plane_axes(): yz->(1,2), xz->(0,2), xy->(0,1)."""
     return ([1, 2], [0, 2], [0, 1])[normal_axis]
 
@@ -49,7 +49,7 @@ def centering_from_varname(var):
 
 
 def parse_plane_tag(tag):
-    """Inverse of CarpetX::format_plane_tag.
+    """Inverse of PlanesX::format_plane_tag.
 
     'xy_z_pos0006p000' -> (normal_axis=2, elevation=6.0). Returns None if the
     tag does not look like a plane tag.
