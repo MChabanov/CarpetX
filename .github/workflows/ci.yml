@@ -61,3 +61,14 @@ jobs:
         run: /bin/bash $GITHUB_WORKSPACE/scripts/test-planes.sh
         env:
           CACTUS_DIR: ${{github.workspace}}/../workspace/Cactus
+
+      - name: Upload plane output (for offline VisIt checks)
+        # The numeric verification never opens the files with VisIt; keep the
+        # raw plane output around so reader/VisIt compatibility can be checked
+        # offline against the exact bytes CI produced.
+        if: ${{matrix.accelerator == 'cpu' && matrix.real-precision == 'real64' && matrix.mode == 'optimize'}}
+        uses: actions/upload-artifact@v4
+        with:
+          name: plane-output
+          path: ${{github.workspace}}/../workspace/Cactus/test-planes-run/
+          retention-days: 7
