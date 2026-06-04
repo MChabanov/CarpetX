@@ -61,19 +61,6 @@ template <>
 struct db_datatype<double> : std::integral_constant<int, DB_DOUBLE> {};
 template <typename T> constexpr int db_datatype_v = db_datatype<T>::value;
 
-inline std::array<int, 2> in_plane_axes(int normal_axis) {
-  switch (normal_axis) {
-  case 0:
-    return {1, 2};
-  case 1:
-    return {0, 2};
-  case 2:
-    return {0, 1};
-  }
-  assert(0);
-  return {0, 1};
-}
-
 struct plane_mesh_props_t {
   std::array<int, 2> nghosts;
   std::string centering_tag;
@@ -139,7 +126,8 @@ std::string make_plane_varname(int gi, int vi, const std::string &plane_tag,
     assert(vi >= 0);
     const int v0 = CCTK_FirstVarIndexI(gi);
     varname = CCTK_FullVarName(v0 + vi);
-    varname = std::regex_replace(varname, std::regex("::"), "-");
+    static const std::regex colons_re("::");
+    varname = std::regex_replace(varname, colons_re, "-");
     for (auto &ch : varname)
       ch = std::tolower(static_cast<unsigned char>(ch));
   }
@@ -212,6 +200,15 @@ void OutputSiloPlanes(const cGH *const cctkGH,
     assert(rc >= 0);
   });
 
+  // Serializing the full parameter table is expensive; do it once per call
+  // (parameters cannot change within one invocation), not per plane and file.
+  std::string all_parameters;
+  if (write_file || write_metafile) {
+    char *const data = IOUtil_GetAllParameters(cctkGH, 1 /*all*/);
+    all_parameters = data;
+    std::free(data);
+  }
+
   for (const auto &plane : planes) {
     const auto in_axes = in_plane_axes(plane.normal_axis);
     const int axis_a = in_axes[0], axis_b = in_axes[1];
@@ -219,40 +216,13 @@ void OutputSiloPlanes(const cGH *const cctkGH,
     // Skip the plane entirely -- creating no directory, data file or metafile
     // -- if its elevation lies outside every Cartesian (patch, level) along the
     // normal axis. The decision is purely geometric, so all ranks agree.
-    {
-      bool plane_in_domain = false;
-      for (const auto &patchdata : ghext->patchdata) {
-        if (!patchdata.is_cartesian)
-          continue;
-        for (const auto &leveldata : patchdata.leveldata) {
-          const amrex::Geometry &geom =
-              patchdata.amrcore->Geom(leveldata.level);
-          for (int gi = 0; gi < CCTK_NumGroups() && !plane_in_domain; ++gi) {
-            if (!output_group.at(gi))
-              continue;
-            if (CCTK_GroupTypeI(gi) != CCTK_GF)
-              continue;
-            const auto &groupdata = *leveldata.groupdata.at(gi);
-            if (groupdata.mfab.empty())
-              continue;
-            if (snap_to_grid_index(plane, geom,
-                                   groupdata.mfab.at(0)->ixType()) >= 0)
-              plane_in_domain = true;
-          }
-          if (plane_in_domain)
-            break;
-        }
-        if (plane_in_domain)
-          break;
-      }
-      if (!plane_in_domain) {
-        if (warned_outside_domain.insert(plane.tag).second)
-          CCTK_VWARN(CCTK_WARN_ALERT,
-                     "OutputSiloPlanes: plane %s lies outside all Cartesian "
-                     "(patch, level) extents; writing no file",
-                     plane.tag.c_str());
-        continue;
-      }
+    if (!plane_in_any_domain(plane, output_group)) {
+      if (warned_outside_domain.insert(plane.tag).second)
+        CCTK_VWARN(CCTK_WARN_ALERT,
+                   "OutputSiloPlanes: plane %s lies outside all Cartesian "
+                   "(patch, level) extents; writing no file",
+                   plane.tag.c_str());
+      continue;
     }
 
     const std::string subdirname =
@@ -272,12 +242,9 @@ void OutputSiloPlanes(const cGH *const cctkGH,
       assert(file);
 
       {
-        char *const data = IOUtil_GetAllParameters(cctkGH, 1 /*all*/);
-        const std::string parameters(data);
-        std::free(data);
-        const int pdims = parameters.length();
-        ierr = DBWrite(file.get(), "AllParameters", parameters.data(), &pdims,
-                       1, DB_CHAR);
+        const int pdims = all_parameters.length();
+        ierr = DBWrite(file.get(), "AllParameters", all_parameters.data(),
+                       &pdims, 1, DB_CHAR);
         assert(!ierr);
       }
     }
@@ -509,11 +476,8 @@ void OutputSiloPlanes(const cGH *const cctkGH,
       assert(metafile);
 
       {
-        char *const data = IOUtil_GetAllParameters(cctkGH, 1 /*all*/);
-        const std::string parameters(data);
-        std::free(data);
-        const int pdims = parameters.length();
-        ierr = DBWrite(metafile.get(), "AllParameters", parameters.data(),
+        const int pdims = all_parameters.length();
+        ierr = DBWrite(metafile.get(), "AllParameters", all_parameters.data(),
                        &pdims, 1, DB_CHAR);
         assert(!ierr);
       }
@@ -629,9 +593,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               slabs.push_back(s);
 
               const std::string proc_filename =
-                  make_plane_subdirname(output_file, plane.tag,
-                                        cctk_iteration) +
-                  "/" +
+                  subdirname + "/" +
                   make_plane_filename(output_file, plane.tag, cctk_iteration,
                                       s.proc / ioproc_every);
               meshnames.push_back(proc_filename + ":" +
@@ -709,17 +671,15 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                 for (int c = 0; c < ncomps_level[l]; ++c)
                   segment_data[l].push_back(comp0_level[l] + c);
               }
-              std::vector<int> segment_lengths;
               std::vector<const int *> segment_data_ptrs;
-              segment_lengths.reserve(nlevels);
               segment_data_ptrs.reserve(nlevels);
-              for (const auto &d : segment_data) {
-                segment_lengths.push_back(int(d.size()));
+              for (const auto &d : segment_data)
                 segment_data_ptrs.push_back(d.data());
-              }
+              // The per-level segment lengths are by construction the entries
+              // of ncomps_level.
               ierr = DBPutGroupelmap(
                   metafile.get(), levelmaps_name.c_str(), nlevels,
-                  segment_types.data(), segment_lengths.data(), nullptr,
+                  segment_types.data(), ncomps_level.data(), nullptr,
                   segment_data_ptrs.data(), nullptr, 0, nullptr);
               assert(!ierr);
             }

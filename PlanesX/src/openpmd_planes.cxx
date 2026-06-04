@@ -161,7 +161,8 @@ struct Unit {
 std::string make_meshname(const int gi, const int patch, const int level,
                           const int tl = 0) {
   std::string groupname = CCTK_FullGroupName(gi);
-  groupname = std::regex_replace(groupname, std::regex("::"), "_");
+  static const std::regex colons_re("::");
+  groupname = std::regex_replace(groupname, colons_re, "_");
   for (auto &ch : groupname)
     ch = std::tolower(ch);
   std::ostringstream buf;
@@ -180,7 +181,8 @@ std::string make_meshname(const int gi, const int patch, const int level,
 std::string make_componentname(const int gi, const int vi) {
   const int v0 = CCTK_FirstVarIndexI(gi);
   std::string varname = CCTK_FullVarName(v0 + vi);
-  varname = std::regex_replace(varname, std::regex("::"), "_");
+  static const std::regex colons_re("::");
+  varname = std::regex_replace(varname, colons_re, "_");
   for (auto &ch : varname)
     ch = std::tolower(ch);
   return varname;
@@ -224,49 +226,31 @@ void OutputOpenPMDPlanes(const cGH *const cctkGH,
   const int myproc = CCTK_MyProc(cctkGH);
   const int ioproc = 0;
 
+  // Serializing the full parameter table is expensive; do it once per call
+  // (parameters cannot change within one invocation), not per plane.
+  std::string all_parameters;
+  if (myproc == ioproc) {
+    char *const data = IOUtil_GetAllParameters(cctkGH, 1 /*all*/);
+    all_parameters = data;
+    std::free(data);
+  }
+
   for (const auto &plane : planes) {
-    const int axis_a = (plane.normal_axis == 0) ? 1 : 0;
-    const int axis_b = (plane.normal_axis == 2) ? 1 : 2;
+    const auto in_axes = in_plane_axes(plane.normal_axis);
+    const int axis_a = in_axes[0], axis_b = in_axes[1];
 
     // Skip the plane entirely -- writing no file at all -- if its elevation
     // lies outside every Cartesian (patch, level) along the normal axis. This
     // is a purely geometric decision (no rank-local data), so all ranks agree
     // and the collective Series creation below stays consistent. It also avoids
     // emitting a file whose per-level chunkInfo attributes would all be empty.
-    {
-      bool plane_in_domain = false;
-      for (const auto &patchdata : ghext->patchdata) {
-        if (!patchdata.is_cartesian)
-          continue;
-        for (const auto &leveldata : patchdata.leveldata) {
-          const amrex::Geometry &geom =
-              patchdata.amrcore->Geom(leveldata.level);
-          for (int gi = 0; gi < CCTK_NumGroups() && !plane_in_domain; ++gi) {
-            if (!output_group.at(gi))
-              continue;
-            if (CCTK_GroupTypeI(gi) != CCTK_GF)
-              continue;
-            const auto &groupdata = *leveldata.groupdata.at(gi);
-            if (groupdata.mfab.empty())
-              continue;
-            if (snap_to_grid_index(plane, geom,
-                                   groupdata.mfab.at(0)->ixType()) >= 0)
-              plane_in_domain = true;
-          }
-          if (plane_in_domain)
-            break;
-        }
-        if (plane_in_domain)
-          break;
-      }
-      if (!plane_in_domain) {
-        if (warned_outside_domain.insert(plane.tag).second)
-          CCTK_VWARN(CCTK_WARN_ALERT,
-                     "OutputOpenPMDPlanes: plane %s lies outside all Cartesian "
-                     "(patch, level) extents; writing no file",
-                     plane.tag.c_str());
-        continue;
-      }
+    if (!plane_in_any_domain(plane, output_group)) {
+      if (warned_outside_domain.insert(plane.tag).second)
+        CCTK_VWARN(CCTK_WARN_ALERT,
+                   "OutputOpenPMDPlanes: plane %s lies outside all Cartesian "
+                   "(patch, level) extents; writing no file",
+                   plane.tag.c_str());
+      continue;
     }
 
     std::ostringstream fnbuf;
@@ -295,12 +279,7 @@ void OutputOpenPMDPlanes(const cGH *const cctkGH,
     write_iter.setTimeUnitSI(Unit::time);
 
     if (myproc == ioproc) {
-      {
-        char *const data = IOUtil_GetAllParameters(cctkGH, 1 /*all*/);
-        const std::string parameters(data);
-        std::free(data);
-        write_iter.setAttribute("AllParameters", parameters);
-      }
+      write_iter.setAttribute("AllParameters", all_parameters);
 
       const int npatches = ghext->patchdata.size();
       write_iter.setAttribute<std::int64_t>("numDims", 2);

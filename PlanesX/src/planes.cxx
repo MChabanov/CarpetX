@@ -1,5 +1,7 @@
 #include "planes.hxx"
 
+#include "driver.hxx"
+
 #include <cctk.h>
 
 #include <AMReX_Box.H>
@@ -199,6 +201,31 @@ int snap_to_grid_index(const plane_spec_t &plane, const amrex::Geometry &geom,
   return i_snap;
 }
 
+bool plane_in_any_domain(const plane_spec_t &plane,
+                         const std::vector<bool> &output_group) {
+  using namespace CarpetX;
+  for (const auto &patchdata : ghext->patchdata) {
+    if (!patchdata.is_cartesian)
+      continue;
+    for (const auto &leveldata : patchdata.leveldata) {
+      const amrex::Geometry &geom = patchdata.amrcore->Geom(leveldata.level);
+      for (int gi = 0; gi < CCTK_NumGroups(); ++gi) {
+        if (!output_group.at(gi))
+          continue;
+        if (CCTK_GroupTypeI(gi) != CCTK_GF)
+          continue;
+        const auto &groupdata = *leveldata.groupdata.at(gi);
+        if (groupdata.mfab.empty())
+          continue;
+        if (snap_to_grid_index(plane, geom, groupdata.mfab.at(0)->ixType()) >=
+            0)
+          return true;
+      }
+    }
+  }
+  return false;
+}
+
 amrex::Box extract_slab(const amrex::FArrayBox &fab, int normal_axis,
                         int slice_idx, int numvars,
                         std::vector<CCTK_REAL> &out_buf) {
@@ -215,25 +242,8 @@ amrex::Box extract_slab(const amrex::FArrayBox &fab, int normal_axis,
   const int nz = box.length(2);
   const std::ptrdiff_t cell_count = std::ptrdiff_t(nx) * ny * nz;
 
-  int a, b;
-  switch (normal_axis) {
-  case 0:
-    a = 1;
-    b = 2;
-    break;
-  case 1:
-    a = 0;
-    b = 2;
-    break;
-  case 2:
-    a = 0;
-    b = 1;
-    break;
-  default:
-    assert(0);
-    a = 0;
-    b = 1;
-  }
+  const auto in_axes = in_plane_axes(normal_axis);
+  const int a = in_axes[0], b = in_axes[1];
   const int na = box.length(a);
   const int nb = box.length(b);
 

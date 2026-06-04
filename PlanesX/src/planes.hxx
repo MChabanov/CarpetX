@@ -7,6 +7,8 @@
 #include <AMReX_Geometry.H>
 #include <AMReX_IndexType.H>
 
+#include <array>
+#include <cassert>
 #include <string>
 #include <vector>
 
@@ -28,10 +30,31 @@ std::vector<plane_spec_t> parse_planes(const std::string &spec,
 std::string format_plane_tag(int normal_axis, CCTK_REAL rounded_elevation,
                              int int_precision, int frac_precision);
 
+// In-plane axes (a, b) for a plane with the given normal:
+// 0 -> (1, 2), 1 -> (0, 2), 2 -> (0, 1).
+inline std::array<int, 2> in_plane_axes(const int normal_axis) {
+  switch (normal_axis) {
+  case 0:
+    return {1, 2};
+  case 1:
+    return {0, 2};
+  case 2:
+    return {0, 1};
+  }
+  assert(0);
+  return {0, 1};
+}
+
 // Returns -1 if elevation lies outside the level along normal_axis.
 // VC indextype snaps to x0+i*dx; CC to x0+(i+0.5)*dx.
 int snap_to_grid_index(const plane_spec_t &plane, const amrex::Geometry &geom,
                        const amrex::IndexType &indextype);
+
+// True if the plane's elevation snaps onto at least one Cartesian
+// (patch, level) of an enabled grid-function group. Purely geometric (no
+// rank-local data), so all ranks agree.
+bool plane_in_any_domain(const plane_spec_t &plane,
+                         const std::vector<bool> &output_group);
 
 // Collapses fab along normal_axis at slice_idx into out_buf (size
 // numvars * in-plane cells, var-major). Returns empty box if out of range.
