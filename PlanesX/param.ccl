@@ -42,6 +42,17 @@ INT silo_planes_every "Output Silo plane data every that many iterations" STEERA
   1:* :: "every that many iterations"
 } -1
 
+BOOLEAN silo_planes_ghosts "Include ghost zones in Silo plane output (no: interior only, smaller files; VisIt may show seams at box boundaries)" STEERABLE=always
+{
+} yes
+
+KEYWORD silo_planes_single_precision "Write Silo plane data in single precision (openPMD planes are always CCTK_REAL)" STEERABLE=always
+{
+  "default" :: "follow IO::out_single_precision"
+  "yes"     :: "write DB_FLOAT"
+  "no"      :: "write CCTK_REAL"
+} "default"
+
 
 
 INT planes_int_precision "Minimum number of integer digits in plane-elevation tag (zero-padded)" STEERABLE=always
@@ -62,3 +73,4 @@ USES STRING out_dir
 USES CCTK_INT out_every
 USES KEYWORD out_mode
 USES CCTK_INT out_proc_every
+USES BOOLEAN out_single_precision

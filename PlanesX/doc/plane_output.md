@@ -44,6 +44,8 @@ options, iteration encoding, units, mesh/component naming) are mirrored from
 | `PlanesX::openpmd_planes` / `_plane_vars` / `_planes_every` | — | Same, for openPMD |
 | `PlanesX::planes_int_precision` | `4` | Min integer digits in tag |
 | `PlanesX::planes_frac_precision` | `3` | Fractional digits in tag |
+| `PlanesX::silo_planes_ghosts` | `yes` | `no`: interior-only Silo slabs (smaller files; VisIt may show box seams) |
+| `PlanesX::silo_planes_single_precision` | `default` | `yes`/`no`/`default` (= follow `IO::out_single_precision`); Silo data as `DB_FLOAT`. openPMD planes are always `CCTK_REAL` |
 
 Spec syntax: `<axes>:<elevation>`, comma-separated; `<elevation>` is the
 world coordinate along the normal axis.
@@ -89,7 +91,15 @@ openPMD:
   <out_dir>/<sim>.<tag>.openpmd.visit         VisIt index
 ```
 
-- **Silo** includes ghost cells (`DBOPT_LO/HI_OFFSET` markers); the metafile
+- **Silo** includes ghost cells (`DBOPT_LO/HI_OFFSET` markers) unless
+  `silo_planes_ghosts = no` (interior-only; with 3 ghost zones the saving is
+  ~29% at 32² boxes and ~67% at 8² boxes). Data is `CCTK_REAL` or, with
+  `silo_planes_single_precision` (or `IO::out_single_precision`), `DB_FLOAT`
+  (2× smaller; mesh coordinates and the recorded plane location stay double).
+  The full `AllParameters` dump lives in the per-iteration **metafile only**
+  (the leaf files of the same iteration would just duplicate it; a steered
+  parameter still shows up, since every output iteration writes a fresh
+  metafile); the metafile
   carries an AMR `DBmrgtree` (`amr_decomp/levels/patches` + `lvlRatios`/
   `ijkExts`/`xyzExts`/`rank` mrgvars) so VisIt shadows coarse data with finer
   levels where they overlap. The mrgtree (and the multimesh's
@@ -123,11 +133,15 @@ openPMD:
 ## Viewing in VisIt
 
 VisIt reads **Silo** natively: open the `.silo_planes.visit` index and
-pseudocolor — the mrgtree gives correct AMR level shadowing. openPMD output
-can be written as HDF5 (`CarpetX::openpmd_format = "HDF5"` → `.h5`; nothing in
-the writer prevents it, as long as the linked openPMD-api has the HDF5
-backend), but direct VisIt plotting of openPMD requires VisIt's openPMD reader
-plugin, which is not in every stock build — so Silo is the reliable VisIt path.
+pseudocolor — the mrgtree gives correct AMR level shadowing. Stock VisIt
+(≥ ~3.1) also ships an openPMD reader (`src/databases/OpenPMD/`, the former
+`openPMD-visit-plugin`), but it reads **HDF5 only** (raw HDF5 calls, no
+openpmd-api, no ADIOS2/BP5), was written for PIC-style files, and does no AMR
+level shadowing — so it can at best display planes written with
+`CarpetX::openpmd_format = "HDF5"` (nothing in the writer prevents `.h5`, as
+long as the linked openPMD-api has the HDF5 backend). ParaView ≥ 5.9 ships an
+openpmd-api-based reader that reads the default `.bp5` directly. For VisIt
+with AMR shadowing, Silo remains the reliable path.
 
 ### mrgtree pitfalls (empty child map; 3D name mismatch)
 

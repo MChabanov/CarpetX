@@ -247,14 +247,20 @@ void OutputSiloPlanes(const cGH *const cctkGH,
     assert(rc >= 0);
   });
 
-  // Serializing the full parameter table is expensive; do it once per call
-  // (parameters cannot change within one invocation), not per plane and file.
+  // Parameter provenance goes into the (per-iteration) metafile only: the
+  // leaf files of the same iteration would just duplicate it. Serialized once
+  // per call.
   std::string all_parameters;
-  if (write_file || write_metafile) {
+  if (write_metafile) {
     char *const data = IOUtil_GetAllParameters(cctkGH, 1 /*all*/);
     all_parameters = data;
     std::free(data);
   }
+
+  const bool single_precision =
+      CCTK_EQUALS(silo_planes_single_precision, "yes") ||
+      (CCTK_EQUALS(silo_planes_single_precision, "default") &&
+       out_single_precision);
 
   for (const auto &plane : planes) {
     const auto in_axes = in_plane_axes(plane.normal_axis);
@@ -287,13 +293,6 @@ void OutputSiloPlanes(const cGH *const cctkGH,
       file = DB::make(DBCreate(filename.c_str(), DB_CLOBBER, DB_LOCAL,
                                output_file.c_str(), DB_HDF5));
       assert(file);
-
-      {
-        const int pdims = all_parameters.length();
-        ierr = DBWrite(file.get(), "AllParameters", all_parameters.data(),
-                       &pdims, 1, DB_CHAR);
-        assert(!ierr);
-      }
 
       write_plane_location(file.get(), plane);
     }
@@ -344,8 +343,11 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               per_group_mesh ? (cv_a ? "cv" : "vc") : std::string("");
 
           const std::array<int, dim> &nghosts3 = groupdata.nghostzones;
-          const plane_mesh_props_t mesh_props{
-              {nghosts3[axis_a], nghosts3[axis_b]}, centering_tag};
+          const std::array<int, 2> nghosts_inplane =
+              silo_planes_ghosts
+                  ? std::array<int, 2>{nghosts3[axis_a], nghosts3[axis_b]}
+                  : std::array<int, 2>{0, 0};
+          const plane_mesh_props_t mesh_props{nghosts_inplane, centering_tag};
           const bool have_mesh = have_meshes.count(mesh_props);
 
           const int ncomponents = dm.size();
@@ -357,13 +359,18 @@ void OutputSiloPlanes(const cGH *const cctkGH,
             if (!(send_this_fab || write_this_fab))
               continue;
 
-            const amrex::Box &fabbox = mfab.fabbox(component);
-            if (slice_idx < fabbox.smallEnd(plane.normal_axis) ||
-                slice_idx > fabbox.bigEnd(plane.normal_axis))
+            // The slab extent: the full exterior box (with ghosts) or, with
+            // silo_planes_ghosts=no, the interior box only. Both are
+            // replicated on every rank, so sender and receiver agree.
+            const amrex::Box databox = silo_planes_ghosts
+                                           ? mfab.fabbox(component)
+                                           : mfab.box(component);
+            if (slice_idx < databox.smallEnd(plane.normal_axis) ||
+                slice_idx > databox.bigEnd(plane.normal_axis))
               continue;
 
-            const std::array<int, 2> dims = {fabbox.length(axis_a),
-                                             fabbox.length(axis_b)};
+            const std::array<int, 2> dims = {databox.length(axis_a),
+                                             databox.length(axis_b)};
             const std::ptrdiff_t zonecount = std::ptrdiff_t(dims[0]) * dims[1];
             assert(numvars * zonecount <= INT_MAX);
 
@@ -373,8 +380,9 @@ void OutputSiloPlanes(const cGH *const cctkGH,
 
             if (send_this_fab) {
               const amrex::FArrayBox &fab = mfab[component];
-              extract_slab(fab, plane.normal_axis, slice_idx, numvars,
-                           local_buf);
+              local_buf.resize(std::size_t(numvars) * zonecount);
+              extract_slab_into(fab, plane.normal_axis, slice_idx, numvars,
+                                databox, local_buf.data());
               if (write_this_fab) {
                 data = local_buf.data();
               } else {
@@ -397,6 +405,15 @@ void OutputSiloPlanes(const cGH *const cctkGH,
 
             any_slab_emitted = true;
 
+            // Optional single-precision conversion of the gathered slab.
+            std::vector<float> float_buf;
+            if (single_precision) {
+              const std::ptrdiff_t n = std::ptrdiff_t(numvars) * zonecount;
+              float_buf.resize(n);
+              for (std::ptrdiff_t k = 0; k < n; ++k)
+                float_buf[k] = float(data[k]);
+            }
+
             if (!have_mesh) {
               const std::array<int, 2> dims_vc =
                   per_group_mesh ? dims
@@ -412,7 +429,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                 coords[d].resize(dims_vc[d]);
                 for (int i = 0; i < dims_vc[d]; ++i)
                   coords[d][i] =
-                      x0[ax] + (fabbox.smallEnd(ax) + i + offset) * dx[ax];
+                      x0[ax] + (databox.smallEnd(ax) + i + offset) * dx[ax];
                 coord_ptrs[d] = coords[d].data();
               }
 
@@ -428,8 +445,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               int cycle = cctk_iteration;
               ierr = DBAddOption(optlist.get(), DBOPT_CYCLE, &cycle);
               assert(!ierr);
-              std::array<int, 2> min_index = {nghosts3[axis_a],
-                                              nghosts3[axis_b]};
+              std::array<int, 2> min_index = nghosts_inplane;
               std::array<int, 2> max_index = min_index;
               ierr =
                   DBAddOption(optlist.get(), DBOPT_LO_OFFSET, min_index.data());
@@ -485,11 +501,16 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               const std::string varname =
                   make_plane_varname(gi, vi, plane.tag, patchdata.patch,
                                      leveldata.level, component);
-              const void *const data_ptr = data + vi * zonecount;
+              const void *const data_ptr =
+                  single_precision
+                      ? static_cast<const void *>(float_buf.data() +
+                                                  vi * zonecount)
+                      : static_cast<const void *>(data + vi * zonecount);
               ierr = DBPutQuadvar1(
                   file.get(), varname.c_str(), meshname.c_str(), data_ptr,
                   dims.data(), planes_ndims, nullptr, 0,
-                  db_datatype_v<CCTK_REAL>, centering, var_optlist.get());
+                  single_precision ? DB_FLOAT : db_datatype_v<CCTK_REAL>,
+                  centering, var_optlist.get());
               assert(!ierr);
             }
           }
@@ -566,8 +587,11 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                 : std::string("");
 
         const std::array<int, dim> &nghosts3 = groupdata0.nghostzones;
-        const plane_mesh_props_t mesh_props{
-            {nghosts3[axis_a], nghosts3[axis_b]}, centering_tag};
+        const std::array<int, 2> nghosts_inplane =
+            silo_planes_ghosts
+                ? std::array<int, 2>{nghosts3[axis_a], nghosts3[axis_b]}
+                : std::array<int, 2>{0, 0};
+        const plane_mesh_props_t mesh_props{nghosts_inplane, centering_tag};
 
         const int nlevels = ghext->num_levels();
         const int npatches = ghext->num_patches();
@@ -616,9 +640,11 @@ void OutputSiloPlanes(const cGH *const cctkGH,
             const amrex::Real *const dx = geom.CellSize();
 
             for (int c = 0; c < ncomponents; ++c) {
-              const amrex::Box &fabbox = mfab.fabbox(c);
-              if (slice_idx < fabbox.smallEnd(plane.normal_axis) ||
-                  slice_idx > fabbox.bigEnd(plane.normal_axis))
+              // Mirror the leaf writer's slab extent (exterior or interior).
+              const amrex::Box databox =
+                  silo_planes_ghosts ? mfab.fabbox(c) : mfab.box(c);
+              if (slice_idx < databox.smallEnd(plane.normal_axis) ||
+                  slice_idx > databox.bigEnd(plane.normal_axis))
                 continue;
               const amrex::Box &validbox = mfab.box(c);
 
@@ -627,19 +653,20 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               s.level = level;
               s.component = c;
               s.proc = dm[c];
-              s.ilo = {fabbox.smallEnd(axis_a), fabbox.smallEnd(axis_b)};
-              s.ihi = {fabbox.bigEnd(axis_a), fabbox.bigEnd(axis_b)};
+              s.ilo = {databox.smallEnd(axis_a), databox.smallEnd(axis_b)};
+              s.ihi = {databox.bigEnd(axis_a), databox.bigEnd(axis_b)};
               s.interior_ilo = {validbox.smallEnd(axis_a),
                                 validbox.smallEnd(axis_b)};
               s.interior_ihi = {validbox.bigEnd(axis_a),
                                 validbox.bigEnd(axis_b)};
               s.xlo = {
-                  double(x0[axis_a] + fabbox.smallEnd(axis_a) * dx[axis_a]),
-                  double(x0[axis_b] + fabbox.smallEnd(axis_b) * dx[axis_b])};
-              s.xhi = {double(x0[axis_a] + fabbox.bigEnd(axis_a) * dx[axis_a]),
-                       double(x0[axis_b] + fabbox.bigEnd(axis_b) * dx[axis_b])};
-              const int len_a = fabbox.length(axis_a);
-              const int len_b = fabbox.length(axis_b);
+                  double(x0[axis_a] + databox.smallEnd(axis_a) * dx[axis_a]),
+                  double(x0[axis_b] + databox.smallEnd(axis_b) * dx[axis_b])};
+              s.xhi = {
+                  double(x0[axis_a] + databox.bigEnd(axis_a) * dx[axis_a]),
+                  double(x0[axis_b] + databox.bigEnd(axis_b) * dx[axis_b])};
+              const int len_a = databox.length(axis_a);
+              const int len_b = databox.length(axis_b);
               s.zonecount = (len_a + int(cv_a)) * (len_b + int(cv_b));
               slabs.push_back(s);
 

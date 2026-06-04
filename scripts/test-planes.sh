@@ -85,10 +85,11 @@ fi
 mkdir -p "$WORKDIR"
 cd "$WORKDIR"
 
-# parfile : nprocs
+# parfile : nprocs : extra verify args (e.g. tolerances)
 run_and_verify() {
   par_base="$1"
   nprocs="$2"
+  extra_args="${3:-}"
   par="$TESTDIR/$par_base.par"
   echo "================================================================"
   echo "Running $par_base on $nprocs proc(s)"
@@ -99,13 +100,13 @@ run_and_verify() {
     "$EXE" "$par"
   fi
   echo "Verifying $par_base"
-  # shellcheck disable=SC2086  # SILO_ARGS is intentionally word-split
+  # shellcheck disable=SC2086  # SILO_ARGS/extra_args are intentionally word-split
   python3 "$TESTDIR/verify_planes.py" \
     --parfile "$par" \
     --out-dir "$par_base" \
     --golden-dir "$GOLDEN" \
     --require-openpmd \
-    $SILO_ARGS
+    $SILO_ARGS $extra_args
 }
 
 # Run on >1 rank where it matters: the single-level and AMR cases exercise the
@@ -117,6 +118,9 @@ run_and_verify planes-amr 2
 run_and_verify planes-amr-midlevel 2
 run_and_verify planes-edge-cases 1
 run_and_verify planes-int-tags 1
+# Silo-only size options (interior-only + single precision): float32 data
+# needs relaxed tolerances (f reaches ~1.8e5 -> ~1e-2 absolute rounding).
+run_and_verify planes-options 2 "--rtol 1e-6 --atol 0.05"
 
 echo "================================================================"
 echo "✓ plane verification passed"
