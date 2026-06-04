@@ -1,15 +1,17 @@
-## Silo plane output with the size-reduction options enabled:
-##   PlanesX::silo_planes_ghosts = no            (interior-only slabs)
-##   PlanesX::silo_planes_single_precision = yes (DB_FLOAT data)
+## Plane output with the non-default IO options enabled:
+##   PlanesX::silo_planes_ghosts = no            (interior-only Silo slabs)
+##   PlanesX::silo_planes_single_precision = yes (DB_FLOAT Silo data)
+##   CarpetX::openpmd_format = "HDF5"            (openPMD planes as .h5)
 ##
 ## Same grid and analytic field as planes-single-level (see that parfile and
-## thorn TestPlanesX); Silo-only, since neither option affects the openPMD
-## writer. Run on 2 ranks so the interior-extent MPI gather (message sizes
-## derived from the interior boxes on both sender and receiver) is exercised.
-## The verifier needs relaxed tolerances for the float32 data (f reaches
-## ~1.8e5, so float32 rounding is ~1e-2 absolute); the recorded plane
-## coordinates stay double and exact. Interior-only output must still pass the
-## coverage check (the interior boxes tile the domain plane).
+## thorn TestPlanesX). Run on 2 ranks so the interior-extent MPI gather
+## (message sizes derived from the interior boxes on both sender and receiver)
+## is exercised. The verifier needs relaxed tolerances for the float32 Silo
+## data (f reaches ~1.8e5, so float32 rounding is ~1e-2 absolute); the openPMD
+## data stays double, and the recorded plane coordinates stay double and
+## exact. Interior-only Silo output must still pass the coverage check (the
+## interior boxes tile the domain plane). The .h5 openPMD output doubles as
+## the input for offline checks with VisIt's (HDF5-only) openPMD reader.
 
 ActiveThorns = "
     CarpetX
@@ -70,6 +72,20 @@ PlanesX::silo_planes_every = 1
 
 PlanesX::silo_planes_ghosts = no
 PlanesX::silo_planes_single_precision = "yes"
+
+CarpetX::openpmd_format = "HDF5"
+PlanesX::openpmd_plane_vars = "
+    TestPlanesX::gf000
+    TestPlanesX::gf001
+    TestPlanesX::gf010
+    TestPlanesX::gf011
+    TestPlanesX::gf100
+    TestPlanesX::gf101
+    TestPlanesX::gf110
+    TestPlanesX::gf111
+"
+PlanesX::openpmd_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0"
+PlanesX::openpmd_planes_every = 1
 
 PlanesX::planes_int_precision = 4
 PlanesX::planes_frac_precision = 3
