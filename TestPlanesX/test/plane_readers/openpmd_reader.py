@@ -63,6 +63,14 @@ def read_openpmd_planes(out_dir, sim):
                     patch = int(patch_m.group(1)) if patch_m else 0
                     ggo = list(mesh.grid_global_offset)   # [off_b, off_a]
                     gsp = list(mesh.grid_spacing)          # [sp_b, sp_a]
+                    # True (snapped) normal coordinate recorded per mesh;
+                    # absent in files written before this metadata existed.
+                    try:
+                        ncoord = (float(mesh.get_attribute("planeCoordinate"))
+                                  if mesh.contains_attribute("planeCoordinate")
+                                  else None)
+                    except Exception:  # noqa: BLE001
+                        ncoord = None
                     for comp_name in mesh:
                         centering = centering_from_varname(comp_name)
                         if centering is None:
@@ -73,13 +81,13 @@ def read_openpmd_planes(out_dir, sim):
                             off = list(ch.offset)          # [o_b, o_a]
                             ext_ = list(ch.extent)         # [c_b, c_a]
                             pending.append((comp_name, centering, level, patch,
-                                            ggo, gsp, pos, off, ext_,
+                                            ggo, gsp, pos, off, ext_, ncoord,
                                             rc.load_chunk(off, ext_)))
                 series.flush()
 
                 slabs = []
                 for (var, cent, level, patch, ggo, gsp, pos,
-                     off, ext_, arr) in pending:
+                     off, ext_, ncoord, arr) in pending:
                     nb, na = int(ext_[0]), int(ext_[1])
                     coords_b = [ggo[0] + (off[0] + j + pos[0]) * gsp[0]
                                 for j in range(nb)]
@@ -87,7 +95,8 @@ def read_openpmd_planes(out_dir, sim):
                                 for i in range(na)]
                     slabs.append(Slab("openpmd", var, cent, normal_axis, level,
                                       patch, axis_a, axis_b, coords_a, coords_b,
-                                      np.asarray(arr).reshape(nb, na)))
+                                      np.asarray(arr).reshape(nb, na),
+                                      ncoord_file=ncoord))
                 records.append((tag, normal_axis, elevation, slabs))
         finally:
             del series

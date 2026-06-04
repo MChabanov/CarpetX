@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <iomanip>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -201,6 +202,20 @@ int snap_to_grid_index(const plane_spec_t &plane, const amrex::Geometry &geom,
   return i_snap;
 }
 
+CCTK_REAL snapped_plane_coordinate(const plane_spec_t &plane,
+                                   const amrex::Geometry &geom,
+                                   const amrex::IndexType &indextype) {
+  const int i_snap = snap_to_grid_index(plane, geom, indextype);
+  if (i_snap < 0)
+    return std::numeric_limits<CCTK_REAL>::quiet_NaN();
+  const int d = plane.normal_axis;
+  const double x0 = geom.ProbLo()[d];
+  const double dx = geom.CellSize()[d];
+  const int ilo = geom.Domain().smallEnd(d);
+  const double offset = indextype.cellCentered(d) ? 0.5 : 0.0;
+  return CCTK_REAL(x0 + (double(i_snap - ilo) + offset) * dx);
+}
+
 bool plane_in_any_domain(const plane_spec_t &plane,
                          const std::vector<bool> &output_group) {
   using namespace CarpetX;
@@ -237,27 +252,54 @@ amrex::Box extract_slab(const amrex::FArrayBox &fab, int normal_axis,
       slice_idx > box.bigEnd(normal_axis))
     return amrex::Box();
 
+  const auto in_axes = in_plane_axes(normal_axis);
+  const int a = in_axes[0], b = in_axes[1];
+  out_buf.resize(std::size_t(numvars) * std::size_t(box.length(a)) *
+                 std::size_t(box.length(b)));
+  extract_slab_into(fab, normal_axis, slice_idx, numvars, box, out_buf.data());
+
+  amrex::IntVect lo = box.smallEnd();
+  amrex::IntVect hi = box.bigEnd();
+  lo.setVal(normal_axis, slice_idx);
+  hi.setVal(normal_axis, slice_idx);
+  return amrex::Box(lo, hi, box.ixType());
+}
+
+void extract_slab_into(const amrex::FArrayBox &fab, const int normal_axis,
+                       const int slice_idx, const int numvars,
+                       const amrex::Box &target, CCTK_REAL *const dst) {
+  assert(normal_axis >= 0 && normal_axis < 3);
+  assert(numvars >= 0 && numvars <= fab.nComp());
+
+  const amrex::Box &box = fab.box();
+  assert(slice_idx >= target.smallEnd(normal_axis) &&
+         slice_idx <= target.bigEnd(normal_axis));
+  assert(slice_idx >= box.smallEnd(normal_axis) &&
+         slice_idx <= box.bigEnd(normal_axis));
+
   const int nx = box.length(0);
   const int ny = box.length(1);
-  const int nz = box.length(2);
-  const std::ptrdiff_t cell_count = std::ptrdiff_t(nx) * ny * nz;
+  const std::ptrdiff_t cell_count = std::ptrdiff_t(nx) * ny * box.length(2);
 
   const auto in_axes = in_plane_axes(normal_axis);
   const int a = in_axes[0], b = in_axes[1];
-  const int na = box.length(a);
-  const int nb = box.length(b);
-
-  out_buf.resize(std::size_t(numvars) * std::size_t(na) * std::size_t(nb));
+  assert(target.smallEnd(a) >= box.smallEnd(a) &&
+         target.bigEnd(a) <= box.bigEnd(a));
+  assert(target.smallEnd(b) >= box.smallEnd(b) &&
+         target.bigEnd(b) <= box.bigEnd(b));
+  const int na = target.length(a);
+  const int nb = target.length(b);
 
   const std::ptrdiff_t strides[3] = {1, std::ptrdiff_t(nx),
                                      std::ptrdiff_t(nx) * ny};
   const std::ptrdiff_t s_a = strides[a];
   const std::ptrdiff_t s_b = strides[b];
   const std::ptrdiff_t s_n = strides[normal_axis];
-  const std::ptrdiff_t base = (slice_idx - box.smallEnd(normal_axis)) * s_n;
+  const std::ptrdiff_t base = (slice_idx - box.smallEnd(normal_axis)) * s_n +
+                              (target.smallEnd(a) - box.smallEnd(a)) * s_a +
+                              (target.smallEnd(b) - box.smallEnd(b)) * s_b;
 
   const CCTK_REAL *const src = fab.dataPtr();
-  CCTK_REAL *const dst = out_buf.data();
 
   for (int vi = 0; vi < numvars; ++vi) {
     const CCTK_REAL *const src_v = src + vi * cell_count + base;
@@ -267,12 +309,6 @@ amrex::Box extract_slab(const amrex::FArrayBox &fab, int normal_axis,
       for (int i = 0; i < na; ++i)
         dst_v[i + std::size_t(j) * na] = src_v[i * s_a + j * s_b];
   }
-
-  amrex::IntVect lo = box.smallEnd();
-  amrex::IntVect hi = box.bigEnd();
-  lo.setVal(normal_axis, slice_idx);
-  hi.setVal(normal_axis, slice_idx);
-  return amrex::Box(lo, hi, box.ixType());
 }
 
 } // namespace PlanesX

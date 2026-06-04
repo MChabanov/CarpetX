@@ -62,6 +62,21 @@ Tag: `<plane>_<axis>_<sign><int>p<frac>`, e.g. `xy_z_pos0012p500` (z=+12.5),
 Silo mesh names get a 2-char in-plane centering suffix (`cv`/`vc`) for rank-1
 staggered groups (per-group mesh); rank-0/2 groups share a mesh (no suffix).
 
+**Recorded true location.** Because the snap is per (level, normal-axis
+centering), variables vertex- vs cell-centred along the normal are written at
+planes up to `dx/2` apart even within one tagged file. The writers therefore
+record the *actual* snapped world coordinate so readers never need to replay
+the snap rule: openPMD attaches per-mesh attributes `planeNormalAxis`,
+`planeIndex` (the snapped grid index) and `planeCoordinate` (the world
+coordinate of that mesh's slab; the iteration-level `planeElevation` remains
+the requested, rounded elevation); Silo writes, into every per-plane file
+(leaf and metafile), `plane_normal_axis`, `plane_elevation`, and per Cartesian
+patch the arrays `plane_ncoord_vertex_m%04d` / `plane_ncoord_cell_m%04d`
+(`double[nlevels]`, indexed by level, NaN where the plane misses the level) —
+pick the array matching your variable's normal-axis centering.
+`verify_planes.py` cross-checks the recorded values against its independent
+snap replay.
+
 ## Output files
 
 ```

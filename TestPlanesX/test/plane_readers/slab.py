@@ -14,13 +14,19 @@ class Slab:
     values is a 2D array indexed [b][a] (axis_b slow, axis_a fast); coords_a and
     coords_b are the 1D world coordinates along axis_a / axis_b, so
     values[j][i] is the field at (coords_a[i], coords_b[j]) on the slice.
+
+    ncoord_file is the slab's true world coordinate along the normal axis *as
+    recorded in the file* (openPMD per-mesh planeCoordinate attribute; Silo
+    plane_ncoord_* arrays), or None for files written before that metadata
+    existed.
     """
 
     __slots__ = ("fmt", "var", "centering", "normal_axis", "level", "patch",
-                 "axis_a", "axis_b", "coords_a", "coords_b", "values")
+                 "axis_a", "axis_b", "coords_a", "coords_b", "values",
+                 "ncoord_file")
 
     def __init__(self, fmt, var, centering, normal_axis, level, patch,
-                 axis_a, axis_b, coords_a, coords_b, values):
+                 axis_a, axis_b, coords_a, coords_b, values, ncoord_file=None):
         self.fmt = fmt                  # "openpmd" or "silo"
         self.var = var                  # variable name as stored
         self.centering = centering      # (cx, cy, cz), 1 == cell-centred
@@ -32,6 +38,7 @@ class Slab:
         self.coords_a = coords_a        # 1D world coords along axis_a (len na)
         self.coords_b = coords_b        # 1D world coords along axis_b (len nb)
         self.values = values            # 2D [b][a]
+        self.ncoord_file = ncoord_file  # recorded normal coord, or None
 
 
 def in_plane_axes(normal_axis):

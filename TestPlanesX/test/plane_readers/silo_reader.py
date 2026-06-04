@@ -63,6 +63,29 @@ def _silo_scalar(v):
     return v
 
 
+def _plane_ncoord(db, h5, cache, patch, level, cell_centred_normal):
+    """True (snapped) normal coordinate recorded by the writer:
+    plane_ncoord_{vertex,cell}_m<patch>[level]. Returns None when the table is
+    absent (files written before this metadata existed) or unreadable."""
+    import numpy as np
+    kind = "cell" if cell_centred_normal else "vertex"
+    key = (patch, kind)
+    if key not in cache:
+        name = "plane_ncoord_%s_m%04d" % (kind, patch)
+        arr = None
+        for read in (lambda: db.GetVar(name), lambda: h5[name][()]):
+            try:
+                arr = np.atleast_1d(np.asarray(read(), dtype=float))
+                break
+            except Exception:  # noqa: BLE001
+                arr = None
+        cache[key] = arr
+    arr = cache[key]
+    if arr is None or level >= len(arr):
+        return None
+    return float(arr[level])
+
+
 def _read_silo_module(out_dir, sim):
     import Silo
     import h5py
@@ -88,6 +111,7 @@ def _read_silo_module(out_dir, sim):
             toc = db.GetToc()
             qvar_names = list(getattr(toc, "qvar_names", []) or [])
             mesh_cache = {}
+            ncoord_cache = {}
             with h5py.File(path, "r") as h5:
                 def h5read(p):
                     return np.asarray(h5[p][()], dtype=float)
@@ -138,9 +162,12 @@ def _read_silo_module(out_dir, sim):
                         coords_b = list(cb[lo_b:hi_b + 1])
                         sub = grid[lo_b:hi_b + 1, lo_a:hi_a + 1]
 
+                    ncoord = _plane_ncoord(db, h5, ncoord_cache, patch, level,
+                                           bool(centering[normal_axis]))
                     slabs.append(Slab("silo", qvname, centering, normal_axis,
                                       level, patch, axis_a, axis_b,
-                                      coords_a, coords_b, np.asarray(sub)))
+                                      coords_a, coords_b, np.asarray(sub),
+                                      ncoord_file=ncoord))
         finally:
             db.Close()
 

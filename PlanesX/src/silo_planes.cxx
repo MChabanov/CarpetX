@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <regex>
@@ -138,6 +139,52 @@ std::string make_plane_varname(int gi, int vi, const std::string &plane_tag,
         << std::setw(2) << std::setfill('0') << reflevel << ".c" << std::setw(8)
         << std::setfill('0') << component;
   return DB::legalize_name(buf.str());
+}
+
+// Record the true location of the plane data in `file` (a per-plane Silo
+// file), so readers need not replay the snap rule: "plane_normal_axis" (int),
+// "plane_elevation" (the requested, rounded elevation), and per Cartesian
+// patch the snapped world coordinate per level and normal-axis centering,
+// "plane_ncoord_vertex_m%04d" / "plane_ncoord_cell_m%04d" (double[nlevels],
+// NaN where the plane misses the level or the patch is non-Cartesian).
+void write_plane_location(DBfile *const file, const plane_spec_t &plane) {
+  using namespace CarpetX;
+  int ierr;
+  {
+    const int dims = 1;
+    const int axis = plane.normal_axis;
+    ierr = DBWrite(file, "plane_normal_axis", &axis, &dims, 1, DB_INT);
+    assert(!ierr);
+    const double elevation = double(plane.elevation);
+    ierr = DBWrite(file, "plane_elevation", &elevation, &dims, 1, DB_DOUBLE);
+    assert(!ierr);
+  }
+  for (const auto &patchdata : ghext->patchdata) {
+    const int nlevels = int(patchdata.leveldata.size());
+    constexpr double nan = std::numeric_limits<double>::quiet_NaN();
+    std::vector<double> coord_vertex(nlevels, nan), coord_cell(nlevels, nan);
+    if (patchdata.is_cartesian) {
+      for (const auto &leveldata : patchdata.leveldata) {
+        const amrex::Geometry &geom = patchdata.amrcore->Geom(leveldata.level);
+        coord_vertex.at(leveldata.level) = double(snapped_plane_coordinate(
+            plane, geom, amrex::IndexType::TheNodeType()));
+        coord_cell.at(leveldata.level) = double(snapped_plane_coordinate(
+            plane, geom, amrex::IndexType::TheCellType()));
+      }
+    }
+    std::ostringstream vbuf, cbuf;
+    vbuf << "plane_ncoord_vertex_m" << std::setw(4) << std::setfill('0')
+         << patchdata.patch;
+    cbuf << "plane_ncoord_cell_m" << std::setw(4) << std::setfill('0')
+         << patchdata.patch;
+    const int dims = nlevels;
+    ierr = DBWrite(file, vbuf.str().c_str(), coord_vertex.data(), &dims, 1,
+                   DB_DOUBLE);
+    assert(!ierr);
+    ierr = DBWrite(file, cbuf.str().c_str(), coord_cell.data(), &dims, 1,
+                   DB_DOUBLE);
+    assert(!ierr);
+  }
 }
 
 } // namespace
@@ -247,6 +294,8 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                        &pdims, 1, DB_CHAR);
         assert(!ierr);
       }
+
+      write_plane_location(file.get(), plane);
     }
 
     bool any_slab_emitted = false;
@@ -489,6 +538,8 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                        1, DB_INT);
         assert(!ierr);
       }
+
+      write_plane_location(metafile.get(), plane);
 
       std::set<plane_mesh_props_t> meta_have_meshes;
       for (int gi = 0; gi < CCTK_NumGroups(); ++gi) {

@@ -15,7 +15,10 @@ In-plane coordinates come from each file's own mesh metadata (so a wrong
 gridSpacing/offset/position/centering is caught); the normal-axis coordinate is
 obtained by independently replaying PlanesX::snap_to_grid_index from the parfile
 geometry (so a wrong slice is caught). The two are sourced differently so
-neither can mask a bug in the other. It also checks coarse-level coverage (the
+neither can mask a bug in the other. The writers additionally record the true
+snapped coordinate in the file (openPMD per-mesh planeCoordinate; Silo
+plane_ncoord_* arrays); that recorded value is cross-checked against the snap
+replay, so the file metadata users rely on is itself verified. It also checks coarse-level coverage (the
 interior points must tile the whole domain plane -> catches silently dropped
 data) and, if --golden-dir is given and holds committed reference output for
 this parfile, compares fresh-vs-golden data (decomposition-independent).
@@ -158,6 +161,17 @@ def verify_slabs(records, geom, rtol, atol):
                 errors.append("%s %s L%d: produced a slab but elevation %.6g "
                               "snaps out of range" % (tag, s.var, s.level, rounded))
                 continue
+            # The writer records the slab's true normal coordinate in the file
+            # (openPMD planeCoordinate; Silo plane_ncoord_*). Check it against
+            # the independent snap replay; freshly written files must have it.
+            if s.ncoord_file is None:
+                errors.append("%s %s L%d: file does not record the plane "
+                              "coordinate (planeCoordinate / plane_ncoord_* "
+                              "missing)" % (tag, s.var, s.level))
+            elif not abs(s.ncoord_file - ncoord) <= atol + rtol * abs(ncoord):
+                errors.append("%s %s L%d: file-recorded plane coordinate %.10g "
+                              "disagrees with snap replay %.10g"
+                              % (tag, s.var, s.level, s.ncoord_file, ncoord))
             A = np.asarray(s.coords_a, dtype=float)
             B = np.asarray(s.coords_b, dtype=float)
             vals = np.asarray(s.values, dtype=float)

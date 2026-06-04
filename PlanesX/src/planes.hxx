@@ -50,6 +50,14 @@ inline std::array<int, 2> in_plane_axes(const int normal_axis) {
 int snap_to_grid_index(const plane_spec_t &plane, const amrex::Geometry &geom,
                        const amrex::IndexType &indextype);
 
+// World coordinate of the snapped slab along the normal axis: the true
+// location of data written for this (plane, level, normal centering). NaN if
+// the plane snaps outside the level (snap_to_grid_index < 0). Only the
+// centering along the normal axis matters.
+CCTK_REAL snapped_plane_coordinate(const plane_spec_t &plane,
+                                   const amrex::Geometry &geom,
+                                   const amrex::IndexType &indextype);
+
 // True if the plane's elevation snaps onto at least one Cartesian
 // (patch, level) of an enabled grid-function group. Purely geometric (no
 // rank-local data), so all ranks agree.
@@ -61,6 +69,15 @@ bool plane_in_any_domain(const plane_spec_t &plane,
 amrex::Box extract_slab(const amrex::FArrayBox &fab, int normal_axis,
                         int slice_idx, int numvars,
                         std::vector<CCTK_REAL> &out_buf);
+
+// Single-pass restricted variant: copies the thickness-1 slab clipped to
+// target's in-plane extent (target must lie within fab.box() and contain
+// slice_idx along the normal) into dst, var-major and axis_a-fastest, of size
+// numvars * target.length(a) * target.length(b). Used by the openPMD writer
+// to stage the interior directly, without an intermediate full-ghost copy.
+void extract_slab_into(const amrex::FArrayBox &fab, int normal_axis,
+                       int slice_idx, int numvars, const amrex::Box &target,
+                       CCTK_REAL *dst);
 
 } // namespace PlanesX
 

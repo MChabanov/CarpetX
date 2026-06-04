@@ -447,6 +447,15 @@ void OutputOpenPMDPlanes(const cGH *const cctkGH,
           mesh.setGridUnitSI(Unit::length);
           mesh.setTimeOffset(CCTK_REAL(0));
 
+          // Record the true location of this mesh's data along the normal
+          // axis (the snapped, centering-dependent world coordinate), so
+          // readers need not replay the snap rule. The iteration-level
+          // planeElevation remains the *requested* (rounded) elevation.
+          mesh.setAttribute("planeNormalAxis", std::int64_t(plane.normal_axis));
+          mesh.setAttribute("planeIndex", std::int64_t(slice_idx));
+          mesh.setAttribute("planeCoordinate", double(snapped_plane_coordinate(
+                                                   plane, geom, indextype)));
+
           const std::vector<double> position = {cv_b ? 0.5 : 0.0,
                                                 cv_a ? 0.5 : 0.0};
 
@@ -476,34 +485,18 @@ void OutputOpenPMDPlanes(const cGH *const cctkGH,
 
             any_slab_emitted = true;
 
+            // Stage the interior slab in a single pass, straight from the
+            // FAB (no intermediate full-ghost copy).
             const amrex::FArrayBox &fab = mfab[component];
-            const amrex::Box &fabbox = fab.box();
-            std::vector<CCTK_REAL> full_slab;
-            extract_slab(fab, plane.normal_axis, slice_idx, numvars, full_slab);
-
-            const int na_full = fabbox.length(axis_a);
-            const int nb_full = fabbox.length(axis_b);
             const int na_valid = validbox.length(axis_a);
             const int nb_valid = validbox.length(axis_b);
-            const int offset_a =
-                validbox.smallEnd(axis_a) - fabbox.smallEnd(axis_a);
-            const int offset_b =
-                validbox.smallEnd(axis_b) - fabbox.smallEnd(axis_b);
             const std::ptrdiff_t np_valid = std::ptrdiff_t(na_valid) * nb_valid;
 
             std::shared_ptr<CCTK_REAL> chunk_ptr(
                 new CCTK_REAL[std::size_t(numvars) * np_valid],
                 std::default_delete<CCTK_REAL[]>());
-            for (int vi = 0; vi < numvars; ++vi) {
-              for (int j = 0; j < nb_valid; ++j)
-                for (int i = 0; i < na_valid; ++i)
-                  chunk_ptr.get()[std::size_t(vi) * np_valid +
-                                  std::size_t(j) * na_valid + i] =
-                      full_slab[std::size_t(vi) * std::size_t(na_full) *
-                                    nb_full +
-                                std::size_t(j + offset_b) * na_full +
-                                std::size_t(i + offset_a)];
-            }
+            extract_slab_into(fab, plane.normal_axis, slice_idx, numvars,
+                              validbox, chunk_ptr.get());
 
             assert(validbox.smallEnd(axis_a) >= idom_lo[0]);
             assert(validbox.smallEnd(axis_b) >= idom_lo[1]);
