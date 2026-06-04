@@ -26,6 +26,7 @@
 #include <cassert>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -227,12 +228,31 @@ void OutputOpenPMDPlanes(const cGH *const cctkGH,
   const int ioproc = 0;
 
   // Serializing the full parameter table is expensive; do it once per call
-  // (parameters cannot change within one invocation), not per plane.
+  // (parameters cannot change within one invocation), not per plane. Every
+  // rank needs it: see the collective-attribute note below.
   std::string all_parameters;
-  if (myproc == ioproc) {
+  {
     char *const data = IOUtil_GetAllParameters(cctkGH, 1 /*all*/);
     all_parameters = data;
     std::free(data);
+  }
+
+  // Series/iteration metadata must be IDENTICAL on every rank: ADIOS2
+  // tolerates rank-local attributes, but the HDF5 backend performs collective
+  // metadata operations, so rank-divergent values (or attributes set on one
+  // rank only) deadlock the collective flush. Broadcast rank 0's author and
+  // hostname so multi-node runs agree.
+  char author[1000] = {0};
+  {
+    char const *const user = getenv("USER");
+    if (user)
+      std::snprintf(author, sizeof author, "%s", user);
+    MPI_Bcast(author, sizeof author, MPI_CHAR, 0, MPI_COMM_WORLD);
+  }
+  char hostname[1000] = {0};
+  {
+    Util_GetHostName(hostname, sizeof hostname);
+    MPI_Bcast(hostname, sizeof hostname, MPI_CHAR, 0, MPI_COMM_WORLD);
   }
 
   for (const auto &plane : planes) {
@@ -261,16 +281,9 @@ void OutputOpenPMDPlanes(const cGH *const cctkGH,
     openPMD::Series plane_series(plane_filename, openPMD::Access::CREATE,
                                  MPI_COMM_WORLD, options);
     plane_series.setIterationEncoding(iterationEncoding);
-    {
-      char const *const user = getenv("USER");
-      if (user)
-        plane_series.setAuthor(user);
-    }
-    {
-      char hostname[1000];
-      Util_GetHostName(hostname, sizeof hostname);
-      plane_series.setMachine(hostname);
-    }
+    if (author[0])
+      plane_series.setAuthor(author);
+    plane_series.setMachine(hostname);
 
     openPMD::WriteIterations plane_write_iters = plane_series.writeIterations();
     openPMD::Iteration write_iter = plane_write_iters[cctk_iteration];
@@ -278,7 +291,10 @@ void OutputOpenPMDPlanes(const cGH *const cctkGH,
     write_iter.setDt(cctk_delta_time);
     write_iter.setTimeUnitSI(Unit::time);
 
-    if (myproc == ioproc) {
+    // Iteration attributes are set on EVERY rank with identical values (all
+    // inputs below are replicated): rank-0-only attributes deadlock the HDF5
+    // backend's collective metadata writes (ADIOS2 happened to tolerate it).
+    {
       write_iter.setAttribute("AllParameters", all_parameters);
 
       const int npatches = ghext->patchdata.size();

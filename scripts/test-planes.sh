@@ -94,10 +94,12 @@ run_and_verify() {
   echo "================================================================"
   echo "Running $par_base on $nprocs proc(s)"
   rm -rf "$par_base"
+  # timeout: a deadlocked run (e.g. an MPI-collective mismatch) must fail the
+  # job quickly instead of pinning the runner until the 6 h workflow timeout.
   if [ -n "$MPIRUN" ] && [ "$nprocs" -gt 1 ]; then
-    "$MPIRUN" -np "$nprocs" "$EXE" "$par"
+    timeout 900 "$MPIRUN" -np "$nprocs" "$EXE" "$par"
   else
-    "$EXE" "$par"
+    timeout 900 "$EXE" "$par"
   fi
   echo "Verifying $par_base"
   # shellcheck disable=SC2086  # SILO_ARGS/extra_args are intentionally word-split
