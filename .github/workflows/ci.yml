@@ -62,6 +62,11 @@ jobs:
         env:
           CACTUS_DIR: ${{github.workspace}}/../workspace/Cactus
 
+      - name: Locate plane output
+        # upload-artifact@v4 rejects '..' in paths; resolve it first.
+        if: ${{matrix.accelerator == 'cpu' && matrix.real-precision == 'real64' && matrix.mode == 'optimize'}}
+        run: echo "PLANES_DIR=$(realpath "$GITHUB_WORKSPACE/../workspace/Cactus/test-planes-run")" >> "$GITHUB_ENV"
+
       - name: Upload plane output (for offline VisIt checks)
         # The numeric verification never opens the files with VisIt; keep the
         # raw plane output around so reader/VisIt compatibility can be checked
@@ -70,5 +75,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: plane-output
-          path: ${{github.workspace}}/../workspace/Cactus/test-planes-run/
+          path: ${{env.PLANES_DIR}}
           retention-days: 7
