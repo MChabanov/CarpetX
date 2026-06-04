@@ -28,6 +28,7 @@
 #include <cassert>
 #include <cctype>
 #include <climits>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -61,6 +62,20 @@ struct db_datatype<float> : std::integral_constant<int, DB_FLOAT> {};
 template <>
 struct db_datatype<double> : std::integral_constant<int, DB_DOUBLE> {};
 template <typename T> constexpr int db_datatype_v = db_datatype<T>::value;
+
+// Centering-independent ownership for interior-only slabs: the cell whose
+// centre is nearest the plane, clamped into the domain (a domain-face vertex
+// plane keeps an owner). Exactly one interior box contains this cell, for
+// every centering.
+inline int plane_owner_cell(const plane_spec_t &plane,
+                            const amrex::Geometry &geom) {
+  const int n = plane.normal_axis;
+  const double r =
+      (double(plane.elevation) - geom.ProbLo()[n]) / geom.CellSize()[n];
+  const amrex::Box &dom = geom.Domain();
+  const int oc = dom.smallEnd(n) + int(std::lround(r - 0.5));
+  return std::max(dom.smallEnd(n), std::min(dom.bigEnd(n), oc));
+}
 
 struct plane_mesh_props_t {
   std::array<int, 2> nghosts;
@@ -333,6 +348,18 @@ void OutputSiloPlanes(const cGH *const cctkGH,
           if (slice_idx < 0)
             continue;
 
+          // Interior-only slabs use a single, centering-independent OWNER box
+          // per plane: a vertex-in-normal plane on a shared box face lies in
+          // BOTH adjacent interior boxes while cell-in-normal data lives in
+          // one, so per-centering membership would give the shared multimesh
+          // a different block count than the cell-centred multivars -- which
+          // VisIt rejects. The owner is the cell whose centre is nearest the
+          // plane, clamped into the domain so a domain-face vertex plane
+          // keeps an owner. (With ghosts, every adjacent exterior box covers
+          // the plane for every centering, so membership stays uniform there
+          // without this.)
+          const int owner_cell = plane_owner_cell(plane, geom);
+
           const bool cv_a = indextype.cellCentered(axis_a);
           const bool cv_b = indextype.cellCentered(axis_b);
           const int in_plane_rank = int(cv_a) + int(cv_b);
@@ -365,9 +392,20 @@ void OutputSiloPlanes(const cGH *const cctkGH,
             const amrex::Box databox = silo_planes_ghosts
                                            ? mfab.fabbox(component)
                                            : mfab.box(component);
-            if (slice_idx < databox.smallEnd(plane.normal_axis) ||
-                slice_idx > databox.bigEnd(plane.normal_axis))
-              continue;
+            if (silo_planes_ghosts) {
+              if (slice_idx < databox.smallEnd(plane.normal_axis) ||
+                  slice_idx > databox.bigEnd(plane.normal_axis))
+                continue;
+            } else {
+              const amrex::Box cellbox =
+                  amrex::enclosedCells(mfab.box(component));
+              if (owner_cell < cellbox.smallEnd(plane.normal_axis) ||
+                  owner_cell > cellbox.bigEnd(plane.normal_axis))
+                continue;
+              // The owner box's interior always contains the snapped slab.
+              assert(slice_idx >= databox.smallEnd(plane.normal_axis) &&
+                     slice_idx <= databox.bigEnd(plane.normal_axis));
+            }
 
             const std::array<int, 2> dims = {databox.length(axis_a),
                                              databox.length(axis_b)};
@@ -639,13 +677,24 @@ void OutputSiloPlanes(const cGH *const cctkGH,
             const amrex::Real *const x0 = geom.ProbLo();
             const amrex::Real *const dx = geom.CellSize();
 
+            // Mirror the leaf writer's centering-independent ownership for
+            // interior-only slabs (see the leaf pass for why).
+            const int owner_cell = plane_owner_cell(plane, geom);
+
             for (int c = 0; c < ncomponents; ++c) {
               // Mirror the leaf writer's slab extent (exterior or interior).
               const amrex::Box databox =
                   silo_planes_ghosts ? mfab.fabbox(c) : mfab.box(c);
-              if (slice_idx < databox.smallEnd(plane.normal_axis) ||
-                  slice_idx > databox.bigEnd(plane.normal_axis))
-                continue;
+              if (silo_planes_ghosts) {
+                if (slice_idx < databox.smallEnd(plane.normal_axis) ||
+                    slice_idx > databox.bigEnd(plane.normal_axis))
+                  continue;
+              } else {
+                const amrex::Box cellbox = amrex::enclosedCells(mfab.box(c));
+                if (owner_cell < cellbox.smallEnd(plane.normal_axis) ||
+                    owner_cell > cellbox.bigEnd(plane.normal_axis))
+                  continue;
+              }
               const amrex::Box &validbox = mfab.box(c);
 
               slab_t s;
