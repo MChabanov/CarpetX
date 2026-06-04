@@ -672,13 +672,8 @@ int OutputGH(const cGH *restrict cctkGH) {
       OutputTSV(cctkGH);
   }
 
-  // Call the IO methods that other thorns registered via
-  // CCTK_RegisterIOMethod. CCTK_OutputGH is overloaded with this function, so
-  // the flesh's default traversal of registered IO methods never runs; restore
-  // it here so that external IO thorns can hook into the output stage. This
-  // runs after the CCTK_ANALYSIS traversal (analysis-bin grid functions are up
-  // to date) and before OutputMeta (registered methods can describe their
-  // output files via OutputMeta_RegisterOutputFile).
+  // Call the IO methods registered via CCTK_RegisterIOMethod; the flesh's
+  // default traversal never runs since CCTK_OutputGH is overloaded.
   {
     const int num_methods = CCTK_NumIOMethods();
     for (int handle = 0; handle < num_methods; ++handle) {
