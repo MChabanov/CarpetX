@@ -14,7 +14,9 @@ PlanesX was extracted from CarpetX (it originally lived in
 CarpetX's `OutputGH` overloads `CCTK_OutputGH`; it now ends by traversing the
 IO methods registered via `CCTK_RegisterIOMethod` (CarpetX commit "call
 registered IO methods from OutputGH" — **required**: without it the callback
-is never invoked and no planes are written). That restores the exact
+is never invoked and no planes are written; `PlanesX_CheckOutputCalled`,
+scheduled at `CCTK_TERMINATE`, aborts with a clear error when plane output
+was requested but the method never ran). That restores the exact
 pre-extraction slot: after the `CCTK_POSTSTEP` *and* `CCTK_ANALYSIS`
 traversals — so grid functions computed in the analysis bin (energies,
 constraints, errors) are up to date when the planes are written — on every

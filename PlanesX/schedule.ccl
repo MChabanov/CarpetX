@@ -9,8 +9,14 @@
 # described in the same iteration's metadata. This requires the CarpetX
 # io-method traversal (commit "CarpetX: call registered IO methods from
 # OutputGH"); without it the callback is never invoked and no planes are
-# written.
+# written -- PlanesX_CheckOutputCalled turns that into a hard error.
 SCHEDULE PlanesX_Startup AT startup
 {
   LANG: C
 } "Register the 2D plane output method (Silo and openPMD)"
+
+SCHEDULE PlanesX_CheckOutputCalled AT terminate
+{
+  LANG: C
+  OPTIONS: global
+} "Error out if plane output was requested but the IO method never ran"

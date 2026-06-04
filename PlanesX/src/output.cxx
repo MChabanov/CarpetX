@@ -4,6 +4,7 @@
 #include "silo_planes.hxx"
 
 #include <cctk.h>
+#include <cctk_Arguments.h>
 #include <cctk_IOMethods.h>
 #include <cctk_Parameters.h>
 
@@ -15,6 +16,12 @@
 namespace PlanesX {
 
 namespace {
+
+// Set when CarpetX::OutputGH invokes the registered IO method; checked at
+// CCTK_TERMINATE. Against a CarpetX without the io-method traversal the
+// registration succeeds but the callback never runs, and requested planes
+// would silently not be written -- turn that into a hard error.
+bool output_method_called = false;
 
 // These mirror CarpetX's io.cxx helpers, which are file-local there.
 
@@ -75,6 +82,8 @@ std::string get_simulation_name() {
 int PlanesX_OutputGH(const cGH *const cctkGH) {
   DECLARE_CCTK_PARAMETERS;
 
+  output_method_called = true;
+
   const int cctk_iteration = cctkGH->cctk_iteration;
 
   {
@@ -134,4 +143,19 @@ extern "C" int PlanesX_Startup() {
       CCTK_RegisterIOMethodOutputGH(handle, PlanesX::PlanesX_OutputGH);
   assert(!ierr);
   return 0;
+}
+
+extern "C" void PlanesX_CheckOutputCalled(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_PARAMETERS;
+
+  if (PlanesX::output_method_called)
+    return;
+  if (strlen(silo_planes) == 0 && strlen(openpmd_planes) == 0)
+    return;
+  CCTK_VERROR(
+      "Plane output was requested (PlanesX::silo_planes / "
+      "PlanesX::openpmd_planes is set), but the registered IO method was "
+      "never invoked: this CarpetX lacks the io-method traversal in OutputGH "
+      "(commit \"CarpetX: call registered IO methods from OutputGH\"), so no "
+      "planes were written.");
 }
