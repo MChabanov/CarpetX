@@ -1,7 +1,7 @@
 ## 2D plane output on a single uniform level.
 ##
 ## Every grid function holds the analytic field f(x,y,z) = x + 100 y + 10000 z
-## (see thorn TestPlanes). The domain uses a distinct, non-zero origin per axis
+## (see thorn TestPlanesX). The domain uses a distinct, non-zero origin per axis
 ## so that a writer assuming ProbLo == 0 or confusing axes is caught. All eight
 ## index-type centerings are written, on the three principal planes plus one
 ## off-centre elevation per direction.
@@ -10,7 +10,7 @@ ActiveThorns = "
     CarpetX
     PlanesX
     IOUtil
-    TestPlanes
+    TestPlanesX
 "
 
 Cactus::cctk_itlast = 0
@@ -60,27 +60,27 @@ CarpetX::out_metadata = no
 # All eight centerings, written on the three principal planes (at the domain
 # centre) plus one offset per direction.
 PlanesX::silo_plane_vars = "
-    TestPlanes::gf000
-    TestPlanes::gf001
-    TestPlanes::gf010
-    TestPlanes::gf011
-    TestPlanes::gf100
-    TestPlanes::gf101
-    TestPlanes::gf110
-    TestPlanes::gf111
+    TestPlanesX::gf000
+    TestPlanesX::gf001
+    TestPlanesX::gf010
+    TestPlanesX::gf011
+    TestPlanesX::gf100
+    TestPlanesX::gf101
+    TestPlanesX::gf110
+    TestPlanesX::gf111
 "
 PlanesX::silo_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0"
 PlanesX::silo_planes_every = 1
 
 PlanesX::openpmd_plane_vars = "
-    TestPlanes::gf000
-    TestPlanes::gf001
-    TestPlanes::gf010
-    TestPlanes::gf011
-    TestPlanes::gf100
-    TestPlanes::gf101
-    TestPlanes::gf110
-    TestPlanes::gf111
+    TestPlanesX::gf000
+    TestPlanesX::gf001
+    TestPlanesX::gf010
+    TestPlanesX::gf011
+    TestPlanesX::gf100
+    TestPlanesX::gf101
+    TestPlanesX::gf110
+    TestPlanesX::gf111
 "
 PlanesX::openpmd_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0"
 PlanesX::openpmd_planes_every = 1

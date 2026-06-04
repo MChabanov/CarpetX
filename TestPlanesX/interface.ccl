@@ -1,5 +1,5 @@
-# Interface definition for thorn TestPlanes
-implements: TestPlanes
+# Interface definition for thorn TestPlanesX
+implements: TestPlanesX
 inherits: Driver, CarpetXRegrid
 
 uses include header: loop.hxx

@@ -8,7 +8,7 @@
 
 using std::fabs;
 
-namespace TestPlanes {
+namespace TestPlanesX {
 
 // Analytic test field. It is linear in the coordinates so that it is
 // represented exactly by AMR prolongation/restriction (any centering, any
@@ -27,8 +27,8 @@ static inline CCTK_REAL f(const Loop::PointDesc &p) {
   return p.x + 100 * p.y + 10000 * p.z;
 }
 
-extern "C" void TestPlanes_SetError(CCTK_ARGUMENTS) {
-  DECLARE_CCTK_ARGUMENTSX_TestPlanes_SetError;
+extern "C" void TestPlanesX_SetError(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTSX_TestPlanesX_SetError;
   DECLARE_CCTK_PARAMETERS;
 
   // Flag a cube at the domain centre for refinement (used by the AMR parfiles;
@@ -45,8 +45,8 @@ extern "C" void TestPlanes_SetError(CCTK_ARGUMENTS) {
   });
 }
 
-extern "C" void TestPlanes_Set(CCTK_ARGUMENTS) {
-  DECLARE_CCTK_ARGUMENTSX_TestPlanes_Set;
+extern "C" void TestPlanesX_Set(CCTK_ARGUMENTS) {
+  DECLARE_CCTK_ARGUMENTSX_TestPlanesX_Set;
   DECLARE_CCTK_PARAMETERS;
 
   // Fill everywhere (interior + ghost zones), so no SYNC is needed. f is linear
@@ -70,4 +70,4 @@ extern "C" void TestPlanes_Set(CCTK_ARGUMENTS) {
                           [&](const Loop::PointDesc &p) { gf111(p.I) = f(p); });
 }
 
-} // namespace TestPlanes
+} // namespace TestPlanesX

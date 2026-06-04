@@ -1,4 +1,4 @@
-# Schedule definitions for thorn TestPlanes
+# Schedule definitions for thorn TestPlanesX
 
 STORAGE: gf000
 STORAGE: gf001
@@ -9,7 +9,7 @@ STORAGE: gf101
 STORAGE: gf110
 STORAGE: gf111
 
-SCHEDULE TestPlanes_SetError AT postinitial
+SCHEDULE TestPlanesX_SetError AT postinitial
 {
   LANG: C
   WRITES: CarpetXRegrid::regrid_error(interior)
@@ -18,15 +18,15 @@ SCHEDULE TestPlanes_SetError AT postinitial
 # Set the analytic field everywhere (interior + ghost zones), so no SYNC is
 # needed. Scheduling at both initial and postregrid keeps every (re)created
 # level holding f exactly, independent of prolongation.
-SCHEDULE GROUP TestPlanes_SetValue AT initial
+SCHEDULE GROUP TestPlanesX_SetValue AT initial
 {
 } "Set up analytic test data"
 
-SCHEDULE GROUP TestPlanes_SetValue AT postregrid
+SCHEDULE GROUP TestPlanesX_SetValue AT postregrid
 {
 } "Re-apply analytic test data after regridding"
 
-SCHEDULE TestPlanes_Set IN TestPlanes_SetValue
+SCHEDULE TestPlanesX_Set IN TestPlanesX_SetValue
 {
   LANG: C
   WRITES: gf000(everywhere), gf001(everywhere), gf010(everywhere),

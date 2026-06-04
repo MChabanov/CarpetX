@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Verify PlanesX 2D plane output (Silo and openPMD) for thorn TestPlanes.
+"""Verify PlanesX 2D plane output (Silo and openPMD) for thorn TestPlanesX.
 
-Every grid function written by TestPlanes holds the analytic field
+Every grid function written by TestPlanesX holds the analytic field
 
     f(x, y, z) = x + 100*y + 10000*z
 

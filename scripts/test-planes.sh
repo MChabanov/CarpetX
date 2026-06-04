@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Run the TestPlanes parfiles with the freshly built executable and verify the
+# Run the TestPlanesX parfiles with the freshly built executable and verify the
 # 2D plane output (Silo + openPMD) analytically. Intended to run after a build,
 # both in CI (.github/workflows/ci.yml) and locally.
 #
@@ -17,7 +17,7 @@ EXE="${EXE:-$CACTUS_DIR/exe/cactus_sim}"
 CARPETX_DIR="${CARPETX_DIR:-$CACTUS_DIR/repos/CarpetX}"
 MPIRUN="${MPIRUN-mpiexec}"
 
-TESTDIR="$CARPETX_DIR/TestPlanes/test"
+TESTDIR="$CARPETX_DIR/TestPlanesX/test"
 GOLDEN="$TESTDIR/golden"
 WORKDIR="${WORKDIR:-$CACTUS_DIR/test-planes-run}"
 

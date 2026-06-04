@@ -11,7 +11,7 @@
 ## it, so the Silo metafile must fall back to a plain multimesh (no mrgtree) --
 ## a single-level AMR child map is all-empty and crashes VisIt's DBFreeGroupelmap
 ## (see PlanesX/doc/plane_output.md). This case verifies that the mrgtree guard
-## keys on the actual child count, not just max_num_levels>1. Because TestPlanes
+## keys on the actual child count, not just max_num_levels>1. Because TestPlanesX
 ## re-applies the analytic field at initial and postregrid, every level holds f
 ## exactly, independent of prolongation.
 
@@ -19,7 +19,7 @@ ActiveThorns = "
     CarpetX
     PlanesX
     IOUtil
-    TestPlanes
+    TestPlanesX
 "
 
 Cactus::cctk_itlast = 0
@@ -69,15 +69,15 @@ CarpetX::max_grid_size_x = 8
 CarpetX::max_grid_size_y = 8
 CarpetX::max_grid_size_z = 8
 
-TestPlanes::refined_center_x = 4.0
-TestPlanes::refined_center_y = 8.0
-TestPlanes::refined_center_z = 6.0
+TestPlanesX::refined_center_x = 4.0
+TestPlanesX::refined_center_y = 8.0
+TestPlanesX::refined_center_z = 6.0
 # Uniform half-size 4 on every level: levels 1 and 2 cover the same nominal cube
 # (they differ only by a ~1-cell buffer/nesting shell), so each in-cube plane
 # crosses all three levels. planes-amr-midlevel.par nests the levels instead.
-TestPlanes::refined_radius[0] = 4.0
-TestPlanes::refined_radius[1] = 4.0
-TestPlanes::refined_radius[2] = 4.0
+TestPlanesX::refined_radius[0] = 4.0
+TestPlanesX::refined_radius[1] = 4.0
+TestPlanesX::refined_radius[2] = 4.0
 
 IO::out_dir = $parfile
 IO::out_every = 1
@@ -91,27 +91,27 @@ CarpetX::out_metadata = no
 # cross every level), plus xy:14.0 which is inside the domain but above the cube
 # and so intersects only the coarsest level (plain-multimesh / no-mrgtree path).
 PlanesX::silo_plane_vars = "
-    TestPlanes::gf000
-    TestPlanes::gf001
-    TestPlanes::gf010
-    TestPlanes::gf011
-    TestPlanes::gf100
-    TestPlanes::gf101
-    TestPlanes::gf110
-    TestPlanes::gf111
+    TestPlanesX::gf000
+    TestPlanesX::gf001
+    TestPlanesX::gf010
+    TestPlanesX::gf011
+    TestPlanesX::gf100
+    TestPlanesX::gf101
+    TestPlanesX::gf110
+    TestPlanesX::gf111
 "
 PlanesX::silo_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0, xy:14.0"
 PlanesX::silo_planes_every = 1
 
 PlanesX::openpmd_plane_vars = "
-    TestPlanes::gf000
-    TestPlanes::gf001
-    TestPlanes::gf010
-    TestPlanes::gf011
-    TestPlanes::gf100
-    TestPlanes::gf101
-    TestPlanes::gf110
-    TestPlanes::gf111
+    TestPlanesX::gf000
+    TestPlanesX::gf001
+    TestPlanesX::gf010
+    TestPlanesX::gf011
+    TestPlanesX::gf100
+    TestPlanesX::gf101
+    TestPlanesX::gf110
+    TestPlanesX::gf111
 "
 PlanesX::openpmd_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0, xy:14.0"
 PlanesX::openpmd_planes_every = 1

@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Generate the golden 2D-plane reference output (.bp5 + .silo) for thorn
-# TestPlanes, in place, on a machine that can run the CarpetX executable
+# TestPlanesX, in place, on a machine that can run the CarpetX executable
 # (e.g. Frontier). No Python / openpmd_api is needed -- it only runs the
 # simulation and copies the produced plane files into the repo, ready to
 # `git add` and commit.
@@ -26,7 +26,7 @@
 #             output. Default 0: only the openPMD .bp5 output is kept.
 #   WORKDIR   Scratch run directory (default: a fresh mktemp dir).
 #
-# The reference is written to TestPlanes/test/golden/<parfile>/ for each parfile.
+# The reference is written to TestPlanesX/test/golden/<parfile>/ for each parfile.
 # Only the openPMD .bp5 output is kept by default -- it is what the verifier
 # compares in CI; the Silo .silo output is large and not numerically compared
 # in CI, so it is omitted (set GOLDEN_INCLUDE_SILO=1 to keep it).
@@ -35,7 +35,7 @@ set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CARPETX_REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
-TESTDIR="$CARPETX_REPO/TestPlanes/test"
+TESTDIR="$CARPETX_REPO/TestPlanesX/test"
 GOLDEN="$TESTDIR/golden"
 
 CACTUS_DIR="${CACTUS_DIR:-$CARPETX_REPO/../workspace/Cactus}"
@@ -115,5 +115,5 @@ make_one planes-int-tags
 
 echo "================================================================"
 echo "Done. Review the new files, then:"
-echo "    git add TestPlanes/test/golden"
-echo "    git commit -m 'TestPlanes: add golden plane output (.bp5 + .silo)'"
+echo "    git add TestPlanesX/test/golden"
+echo "    git commit -m 'TestPlanesX: add golden plane output (.bp5 + .silo)'"

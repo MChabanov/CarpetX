@@ -20,4 +20,4 @@ out_mode/out_proc_every, openpmd_format, compression, cadence fallback to
 CarpetX::out_{silo,openpmd}_every).
 
 See doc/plane_output.md for parameters, file layout, the VisIt path, and the
-TestPlanes-based verification.
+TestPlanesX-based verification.

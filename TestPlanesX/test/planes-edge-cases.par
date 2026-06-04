@@ -26,7 +26,7 @@ ActiveThorns = "
     CarpetX
     PlanesX
     IOUtil
-    TestPlanes
+    TestPlanesX
 "
 
 Cactus::cctk_itlast = 0
@@ -66,27 +66,27 @@ IO::parfile_write = no
 CarpetX::out_metadata = no
 
 PlanesX::silo_plane_vars = "
-    TestPlanes::gf000
-    TestPlanes::gf001
-    TestPlanes::gf010
-    TestPlanes::gf011
-    TestPlanes::gf100
-    TestPlanes::gf101
-    TestPlanes::gf110
-    TestPlanes::gf111
+    TestPlanesX::gf000
+    TestPlanesX::gf001
+    TestPlanesX::gf010
+    TestPlanesX::gf011
+    TestPlanesX::gf100
+    TestPlanesX::gf101
+    TestPlanesX::gf110
+    TestPlanesX::gf111
 "
 PlanesX::silo_planes = "yz:3.5, xz:-1.0, xy:5.1234, xy:100.0, yz:-4.0, nocolon, qr:1.0, xy:abc, xz:2.0junk"
 PlanesX::silo_planes_every = 1
 
 PlanesX::openpmd_plane_vars = "
-    TestPlanes::gf000
-    TestPlanes::gf001
-    TestPlanes::gf010
-    TestPlanes::gf011
-    TestPlanes::gf100
-    TestPlanes::gf101
-    TestPlanes::gf110
-    TestPlanes::gf111
+    TestPlanesX::gf000
+    TestPlanesX::gf001
+    TestPlanesX::gf010
+    TestPlanesX::gf011
+    TestPlanesX::gf100
+    TestPlanesX::gf101
+    TestPlanesX::gf110
+    TestPlanesX::gf111
 "
 PlanesX::openpmd_planes = "yz:3.5, xz:-1.0, xy:5.1234, xy:100.0, yz:-4.0, nocolon, qr:1.0, xy:abc, xz:2.0junk"
 PlanesX::openpmd_planes_every = 1

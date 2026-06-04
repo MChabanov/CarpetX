@@ -1,4 +1,4 @@
-# Main make.code.defn file for thorn TestPlanes
+# Main make.code.defn file for thorn TestPlanesX
 
 # Source files in this directory
 SRCS = test.cxx
