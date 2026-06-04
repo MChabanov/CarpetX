@@ -129,6 +129,15 @@ openPMD:
   reader would see a one-cell fill stripe. Sizing per centering would fix it but
   changes every dataset shape (golden + checkpoints), so it is left as is. Silo
   has no analogue (a zone-centred quadvar is `N` zones on an `N+1`-node mesh).
+  **Backend caveat:** ADIOS2's `available_chunks()` returns exactly the written
+  boxes, but HDF5 has no chunk bookkeeping and reports the *full extent* as one
+  chunk — an HDF5 reader therefore must clip the high-edge fill index off
+  cell-centred axes (`plane_readers/openpmd_reader.py` does). For AMR planes
+  read from HDF5, the full-extent chunk would additionally contain fill values
+  wherever a finer level's boxes do not reach; a fully general HDF5 reader
+  should reconstruct the written boxes from the per-level `chunkInfo`
+  attributes instead (the `.h5` test coverage, `planes-options.par`, is
+  single-level).
 
 ## Viewing in VisIt
 

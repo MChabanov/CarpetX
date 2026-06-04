@@ -77,9 +77,25 @@ def read_openpmd_planes(out_dir, sim):
                             continue
                         rc = mesh[comp_name]
                         pos = list(rc.position)            # [pos_b, pos_a]
+                        shape = list(rc.shape)             # [N_b, N_a] vertices
                         for ch in rc.available_chunks():
-                            off = list(ch.offset)          # [o_b, o_a]
-                            ext_ = list(ch.extent)         # [c_b, c_a]
+                            off = [int(v) for v in ch.offset]   # [o_b, o_a]
+                            ext_ = [int(v) for v in ch.extent]  # [c_b, c_a]
+                            # The dataset extent is the vertex count for every
+                            # centering; a cell-centred axis writes only ncells
+                            # = N-1, leaving the high-edge index as backend
+                            # fill (see plane_output.md). ADIOS2 reports only
+                            # the written boxes, but HDF5 has no chunk
+                            # bookkeeping and reports the full extent as one
+                            # chunk -- clip the fill index off cell-centred
+                            # axes (a no-op for ADIOS2 box chunks).
+                            for d, axis in ((0, axis_b), (1, axis_a)):
+                                if centering[axis]:
+                                    valid = int(shape[d]) - 1
+                                    ext_[d] = min(ext_[d],
+                                                  max(0, valid - off[d]))
+                            if ext_[0] == 0 or ext_[1] == 0:
+                                continue
                             pending.append((comp_name, centering, level, patch,
                                             ggo, gsp, pos, off, ext_, ncoord,
                                             rc.load_chunk(off, ext_)))
