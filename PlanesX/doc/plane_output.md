@@ -46,6 +46,7 @@ options, iteration encoding, units, mesh/component naming) are mirrored from
 | `PlanesX::planes_frac_precision` | `3` | Fractional digits in tag |
 | `PlanesX::silo_planes_ghosts` | `yes` | `no`: interior-only Silo slabs (smaller files; VisIt may show box seams) |
 | `PlanesX::silo_planes_single_precision` | `default` | `yes`/`no`/`default` (= follow `IO::out_single_precision`); Silo data as `DB_FLOAT`. openPMD planes are always `CCTK_REAL` |
+| `PlanesX::silo_planes_nameschemes` | `no` | `yes`: metafiles use Silo nameschemes (one pattern + small index arrays) instead of one explicit string per block and variable — metafile size independent of block count; see *Nameschemes* below |
 
 Spec syntax: `<axes>:<elevation>`, comma-separated; `<elevation>` is the
 world coordinate along the normal axis.
@@ -406,49 +407,53 @@ because nothing opens the metafile; each was caught only by driving VisIt.
 A namescheme bug would fail the same way. Hence: the CI VisIt gate lands
 FIRST, the feature second.
 
-### Commit A — CI VisIt gate (valuable independently)
+### Commit A — CI VisIt gate: DONE
 
-Add a step to the cpu/real64/optimize job after "Verify 2D plane output":
-1. Restore/download a headless VisIt (pin 3.3.3, the tarball install used
-   locally; ~300 MB) with `actions/cache` keyed on the VisIt version.
-2. Run `visit -nowin -cli -s scripts/visit-check-planes.py
-   $PLANES_DIR` (env var already exported by the "Locate plane output"
-   step); the script exits nonzero on any FAIL — fail the job on it. Note
-   VisIt's CLI mangles exit codes (observed 250 on success); gate on the
-   script's printed "checked N databases, 0 failure(s)" line instead of the
-   raw exit status.
-3. Upload the rendered PNGs as a second artifact (`plane-renders`).
-Acceptance: a deliberate metafile corruption (e.g. drop one multivar block
-name locally) is caught by the step.
+The cpu/real64/optimize job installs a cached headless VisIt 3.4.2 (debian12
+tarball; the carpetx container additionally needs the system
+X11/fontconfig/GL/dbus layer via apt, an `ldd` diagnostic scan, and a
+fast-failing cli+viewer smoke test) and runs
+`visit -nowin -cli -s scripts/visit-check-planes.py $PLANES_DIR`, time-bounded
+with `timeout` (a wedged viewer must not pin the job). VisIt's CLI mangles
+exit codes (250 observed on success), so the step gates on the script's
+printed "checked N databases, 0 failure(s)" line. Rendered PNGs are uploaded
+as the `plane-renders` artifact. The checker opens every metafile index,
+every leaf file, and every openPMD `.h5`, and fails draws whose actual data
+has zero zones or a non-finite MinMax (the all-white mode). Proven in anger:
+it caught the interior-mode empty-leaf bug (see FIXED above) on its first
+in-CI run.
 
-### Commit B — `PlanesX::silo_planes_nameschemes` (default `no` for one soak)
+### Commit B — `PlanesX::silo_planes_nameschemes`: DONE (default `no` for one soak)
 
-KEYWORD/BOOLEAN parameter; metafile pass of `silo_planes.cxx` only:
-1. Build per-block integer arrays from the existing `slabs` vector:
-   `file_of_block[n] = s.proc / ioproc_every`, plus `patch_of_block`,
-   `level_of_block`, `comp_of_block`. `DBWrite` them into the metafile.
-   (The mapping is irregular — only intersecting components are listed and
-   the owning file varies per block — so external arrays are required;
-   a pure printf-of-n pattern cannot express it.)
-2. `DBPutMultimesh`/`DBPutMultivar` with null name arrays and
-   `DBOPT_MB_BLOCK_NS` / `DBOPT_MB_FILE_NS` (+ existing
-   `DBOPT_MB_BLOCK_TYPE`). The namescheme expressions reference the external
-   arrays; consult the Silo manual (`DBMakeNamescheme`, external-array
-   `&array` references) and Silo's `tests/multi_file.c` /
-   `tests/namescheme.c` for exact syntax. VisIt resolves these natively.
-3. CRITICAL: the generated names must equal the *legalized* leaf object
-   names byte-for-byte — `DB::legalize_name` rewrites '.' → '_' etc., so
-   derive the pattern from the post-legalization form of
-   `make_plane_meshname`/`make_plane_varname` (e.g.
-   `box_<tag>[_<ctag>]_ghostsGG_GG_m%04d_rl%02d_c%08d`), and add a
-   debug-mode assert comparing pattern-expansion against the explicit name
-   for block 0.
-4. mrgtree, `DBOPT_EXTENTS`/`DBOPT_ZONECOUNTS`, leaf files: unchanged
-   (region maps reference block indices, not names).
-5. Tests: enable in `planes-options.par` (so every CI artifact contains
-   namescheme metafiles and the Commit-A gate exercises them); run the
-   local sweep on 3.3.3 and 3.4.1 (`visit-check-planes.py`) before flipping
-   any default. Numeric verifier needs no change.
+BOOLEAN parameter; metafile pass of `silo_planes.cxx` only. Per multimesh,
+the per-block integer arrays `<multimesh>_ns_{patch,level,comp,file}`
+(`file[n] = s.proc / ioproc_every`; the mapping is irregular — only
+intersecting components are listed — so external arrays are required) are
+`DBWrite`n into the metafile, and `DBPutMultimesh`/`DBPutMultivar` get null
+name arrays plus `DBOPT_MB_FILE_NS` / `DBOPT_MB_BLOCK_NS` patterns such as
+
+    |<subdir>/<sim>.<tag>.it<NNNNNNNN>.p%06d.silo|#/<multimesh>_ns_file[n]
+    |box_<tag>[_<ctag>]_ghostsGG_GG_m%04d_rl%02d_c%08d|#/<mm>_ns_patch[n]|...
+
+**Verify-or-fallback.** Rather than deriving the patterns
+correct-by-construction (legalization, '%'/'|' in names, format drift), the
+writer expands every namescheme through the same file-based
+`DBMakeNamescheme(str, 0, dbfile, 0)` path VisIt uses on read and compares
+all expansions against the explicit name lists (which are still built — the
+win is metafile size and VisIt parse time, not writer CPU; the check is one
+sprintf+compare per block, the same order as building the names). On any
+mismatch or constructor failure the explicit lists are written instead, with
+a warning — a namescheme only ever lands in a file after being proven
+equivalent. A multivar reuses the multimesh's arrays only when its block
+count matches (out-of-range external-array indexing is undefined); content
+agreement is the expansion check's job. mrgtree, `DBOPT_EXTENTS`/
+`DBOPT_ZONECOUNTS`, region maps (block indices, not names) and leaf files
+are unchanged; the numeric verifier reads leaf files only.
+
+Tests: enabled in `planes-options.par` (single-level, plain multimesh) and
+`planes-amr-noghosts.par` (namescheme × AMR mrgtree × interior mode);
+`planes-amr.par` keeps explicit lists so both metafile forms stay covered by
+the CI VisIt gate. Flip the default only after a production soak.
 
 ### Commit C (later, optional) — upstream port
 
