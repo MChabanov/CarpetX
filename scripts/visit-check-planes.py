@@ -56,13 +56,23 @@ def open_db(db):
     return False
 
 
+def scalarize(v):
+    """GetQueryOutputValue returns a number, or a tuple of numbers for
+    queries with several outputs (e.g. NumZones on a mesh with ghost zones
+    reports total and ghost counts). Reduce to the leading number."""
+    if hasattr(v, "__iter__"):
+        seq = list(v)
+        return float(seq[0]) if seq else 0.0
+    return float(v)
+
+
 def draw_has_data():
     """True iff the current (drawn) plot contains real data: a nonzero zone
     count and a finite MinMax. An all-white draw (blocks missing / unreadable
     / empty) has no zones, or MinMax fails or returns non-finite values."""
     try:
         Query("NumZones", use_actual_data=1)  # noqa: F821
-        nzones = GetQueryOutputValue()  # noqa: F821
+        nzones = scalarize(GetQueryOutputValue())  # noqa: F821
     except Exception:  # noqa: BLE001
         return False, "NumZones query failed"
     if not nzones or nzones <= 0:
