@@ -270,3 +270,77 @@ Upstream CarpetX (lwJi/dev) later grew an independent 2D slice capability
 `io_slice.hxx`). The two coexist: parameter names are disjoint, and PlanesX
 keeps the per-level snapping, arbitrary per-plane elevations, mrgtree
 shadowing and the TestPlanesX verification described here.
+
+## PLANNED: Silo nameschemes (+ CI VisIt gate)
+
+Status: planned, not started. Plan agreed 2026-06-05; execute in this order.
+
+**Motivation.** The Silo metafile stores one explicit string per block in the
+multimesh and in *every* multivar — O(blocks × (1 + nvars)) strings of
+~150 bytes. At production scale (10³–10⁴ intersecting boxes, tens of
+variables, per plane, per iteration) that is megabytes of repeated strings
+per metafile, all parsed by VisIt on open. Silo *nameschemes* (≥4.8,
+supported by any VisIt of the last decade, incl. 3.3.3/3.4.1) replace the
+lists with one printf-like pattern plus small integer index arrays —
+metafile size becomes independent of block count. Leaf files and data bytes
+are untouched; the numeric verifier (leaf-only) and the value-keyed golden
+are unaffected by construction.
+
+**History/why gated.** Three metafile-class bugs (the mrgtree empty-child-map
+VisIt crash, the 3D mrgTree name mismatch, the interior-mode
+multimesh/multivar block-count mismatch) were invisible to the numeric CI
+because nothing opens the metafile; each was caught only by driving VisIt.
+A namescheme bug would fail the same way. Hence: the CI VisIt gate lands
+FIRST, the feature second.
+
+### Commit A — CI VisIt gate (valuable independently)
+
+Add a step to the cpu/real64/optimize job after "Verify 2D plane output":
+1. Restore/download a headless VisIt (pin 3.3.3, the tarball install used
+   locally; ~300 MB) with `actions/cache` keyed on the VisIt version.
+2. Run `visit -nowin -cli -s scripts/visit-check-planes.py
+   $PLANES_DIR` (env var already exported by the "Locate plane output"
+   step); the script exits nonzero on any FAIL — fail the job on it. Note
+   VisIt's CLI mangles exit codes (observed 250 on success); gate on the
+   script's printed "checked N databases, 0 failure(s)" line instead of the
+   raw exit status.
+3. Upload the rendered PNGs as a second artifact (`plane-renders`).
+Acceptance: a deliberate metafile corruption (e.g. drop one multivar block
+name locally) is caught by the step.
+
+### Commit B — `PlanesX::silo_planes_nameschemes` (default `no` for one soak)
+
+KEYWORD/BOOLEAN parameter; metafile pass of `silo_planes.cxx` only:
+1. Build per-block integer arrays from the existing `slabs` vector:
+   `file_of_block[n] = s.proc / ioproc_every`, plus `patch_of_block`,
+   `level_of_block`, `comp_of_block`. `DBWrite` them into the metafile.
+   (The mapping is irregular — only intersecting components are listed and
+   the owning file varies per block — so external arrays are required;
+   a pure printf-of-n pattern cannot express it.)
+2. `DBPutMultimesh`/`DBPutMultivar` with null name arrays and
+   `DBOPT_MB_BLOCK_NS` / `DBOPT_MB_FILE_NS` (+ existing
+   `DBOPT_MB_BLOCK_TYPE`). The namescheme expressions reference the external
+   arrays; consult the Silo manual (`DBMakeNamescheme`, external-array
+   `&array` references) and Silo's `tests/multi_file.c` /
+   `tests/namescheme.c` for exact syntax. VisIt resolves these natively.
+3. CRITICAL: the generated names must equal the *legalized* leaf object
+   names byte-for-byte — `DB::legalize_name` rewrites '.' → '_' etc., so
+   derive the pattern from the post-legalization form of
+   `make_plane_meshname`/`make_plane_varname` (e.g.
+   `box_<tag>[_<ctag>]_ghostsGG_GG_m%04d_rl%02d_c%08d`), and add a
+   debug-mode assert comparing pattern-expansion against the explicit name
+   for block 0.
+4. mrgtree, `DBOPT_EXTENTS`/`DBOPT_ZONECOUNTS`, leaf files: unchanged
+   (region maps reference block indices, not names).
+5. Tests: enable in `planes-options.par` (so every CI artifact contains
+   namescheme metafiles and the Commit-A gate exercises them); run the
+   local sweep on 3.3.3 and 3.4.1 (`visit-check-planes.py`) before flipping
+   any default. Numeric verifier needs no change.
+
+### Commit C (later, optional) — upstream port
+
+The same string-list explosion is larger in upstream's 3D `io_silo.cxx`
+metafiles (more boxes, more variables; same structure). After the PlanesX
+implementation has soaked, port it as an upstream PR — same proving-ground
+pattern as the IO-method hook (lwJi/CarpetX#87) and the openPMD-HDF5
+collective fix (#90).
