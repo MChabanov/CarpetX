@@ -94,6 +94,11 @@ PlanesX::silo_planes_every = 1
 
 PlanesX::silo_planes_ghosts = no
 PlanesX::silo_planes_single_precision = "yes"
+# Namescheme metafiles combined with the AMR mrgtree (3 levels, multiple
+# files): the namescheme x mrgtree x interior-mode combination the production
+# runs will use. planes-amr keeps the default explicit name lists so both
+# metafile forms stay covered by the CI VisIt gate.
+PlanesX::silo_planes_nameschemes = yes
 
 PlanesX::openpmd_plane_vars = "
     TestPlanesX::gf000

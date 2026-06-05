@@ -72,6 +72,10 @@ PlanesX::silo_planes_every = 1
 
 PlanesX::silo_planes_ghosts = no
 PlanesX::silo_planes_single_precision = "yes"
+# Namescheme metafiles (single-level: plain multimesh, no mrgtree). The
+# numeric verifier reads leaf files only and is unaffected; the CI VisIt gate
+# opens the namescheme multimesh/multivars.
+PlanesX::silo_planes_nameschemes = yes
 
 CarpetX::openpmd_format = "HDF5"
 PlanesX::openpmd_plane_vars = "
