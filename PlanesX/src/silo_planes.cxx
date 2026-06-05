@@ -299,20 +299,31 @@ void OutputSiloPlanes(const cGH *const cctkGH,
     ierr = CCTK_CreateDirectory(0755, pathname.c_str());
     assert(ierr >= 0);
 
+    // The leaf file is created lazily, on the first slab this rank actually
+    // writes for this plane: an IO rank that owns no intersecting box would
+    // otherwise leave a file holding only the plane-location arrays and no
+    // mesh/var object, which VisIt's Silo reader rejects at open time ("It
+    // may be an invalid file"). With silo_planes_ghosts=no the single-owner
+    // membership makes such ranks routine (the production failure mode); with
+    // ghosts they occur on any run large enough that some rank's boxes all
+    // miss the plane. The metafile references only files of ranks that own a
+    // slab, so the never-created files are never referenced.
     DB::ptr<DBfile> file;
-    if (write_file) {
-      const std::string filename =
-          pathname + "/" +
-          make_plane_filename(output_file, plane.tag, cctk_iteration,
-                              myproc / ioproc_every);
-      file = DB::make(DBCreate(filename.c_str(), DB_CLOBBER, DB_LOCAL,
-                               output_file.c_str(), DB_HDF5));
-      assert(file);
+    const auto ensure_file = [&]() {
+      assert(write_file);
+      if (!file) {
+        const std::string filename =
+            pathname + "/" +
+            make_plane_filename(output_file, plane.tag, cctk_iteration,
+                                myproc / ioproc_every);
+        file = DB::make(DBCreate(filename.c_str(), DB_CLOBBER, DB_LOCAL,
+                                 output_file.c_str(), DB_HDF5));
+        assert(file);
 
-      write_plane_location(file.get(), plane);
-    }
-
-    bool any_slab_emitted = false;
+        write_plane_location(file.get(), plane);
+      }
+      return file.get();
+    };
 
     for (const auto &patchdata : ghext->patchdata) {
       if (!patchdata.is_cartesian) {
@@ -441,7 +452,11 @@ void OutputSiloPlanes(const cGH *const cctkGH,
             if (!write_this_fab)
               continue;
 
-            any_slab_emitted = true;
+            DBfile *const leaf_file = ensure_file();
+
+            const std::string meshname = make_plane_meshname(
+                plane.tag, centering_tag, mesh_props.nghosts, patchdata.patch,
+                leveldata.level, component);
 
             // Optional single-precision conversion of the gathered slab.
             std::vector<float> float_buf;
@@ -471,10 +486,6 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                 coord_ptrs[d] = coords[d].data();
               }
 
-              const std::string meshname = make_plane_meshname(
-                  plane.tag, centering_tag, mesh_props.nghosts, patchdata.patch,
-                  leveldata.level, component);
-
               const DB::ptr<DBoptlist> optlist = DB::make(DBMakeOptlist(10));
               assert(optlist);
               int cartesian = DB_CARTESIAN;
@@ -503,17 +514,13 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                                  &hide_from_gui);
               assert(!ierr);
 
-              ierr = DBPutQuadmesh(file.get(), meshname.c_str(), nullptr,
+              ierr = DBPutQuadmesh(leaf_file, meshname.c_str(), nullptr,
                                    coord_ptrs.data(), dims_vc.data(),
                                    planes_ndims, db_datatype_v<CCTK_REAL>,
                                    DB_COLLINEAR, optlist.get());
               assert(!ierr);
               have_meshes.insert(mesh_props);
             }
-
-            const std::string meshname = make_plane_meshname(
-                plane.tag, centering_tag, mesh_props.nghosts, patchdata.patch,
-                leveldata.level, component);
 
             const DB::ptr<DBoptlist> var_optlist = DB::make(DBMakeOptlist(10));
             assert(var_optlist);
@@ -545,7 +552,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                                                   vi * zonecount)
                       : static_cast<const void *>(data + vi * zonecount);
               ierr = DBPutQuadvar1(
-                  file.get(), varname.c_str(), meshname.c_str(), data_ptr,
+                  leaf_file, varname.c_str(), meshname.c_str(), data_ptr,
                   dims.data(), planes_ndims, nullptr, 0,
                   single_precision ? DB_FLOAT : db_datatype_v<CCTK_REAL>,
                   centering, var_optlist.get());
@@ -557,12 +564,13 @@ void OutputSiloPlanes(const cGH *const cctkGH,
     }
 
     // The geometric pre-check above already wrote no file for a plane outside
-    // every level, so reaching here means the plane is in domain. Since
-    // any_slab_emitted is per-rank, a rank that owns no intersecting box
-    // legitimately emits nothing; only warn if NO rank emitted anything (a real
-    // inconsistency), and only from the metafile rank to avoid duplicates.
+    // every level, so reaching here means the plane is in domain. The leaf
+    // file exists iff this rank emitted a slab (lazy creation above); a rank
+    // that owns no intersecting box legitimately emits nothing. Only warn if
+    // NO rank emitted anything (a real inconsistency), and only from the
+    // metafile rank to avoid duplicates.
     {
-      int local_emitted = any_slab_emitted ? 1 : 0;
+      int local_emitted = file ? 1 : 0;
       int global_emitted = 0;
       MPI_Allreduce(&local_emitted, &global_emitted, 1, MPI_INT, MPI_LOR,
                     mpi_comm);

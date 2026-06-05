@@ -24,6 +24,11 @@ WORKDIR="${WORKDIR:-$CACTUS_DIR/test-planes-run}"
 # OpenMPI refuses to run as root unless told otherwise (containers run as root).
 export OMPI_ALLOW_RUN_AS_ROOT=1
 export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+# Allow more MPI ranks than cores (the interior-mode regression test runs on 4
+# ranks; CI runners may have fewer cores). Ignored by non-OpenMPI launchers;
+# the PRTE variable covers OpenMPI 5.
+export OMPI_MCA_rmaps_base_oversubscribe=true
+export PRTE_MCA_rmaps_default_mapping_policy=:oversubscribe
 export LD_LIBRARY_PATH="/usr/local/lib:/usr/lib/x86_64-linux-gnu/hdf5/serial/lib:${LD_LIBRARY_PATH:-}"
 
 if [ ! -x "$EXE" ]; then
@@ -123,6 +128,12 @@ run_and_verify planes-int-tags 1
 # Silo-only size options (interior-only + single precision): float32 data
 # needs relaxed tolerances (f reaches ~1.8e5 -> ~1e-2 absolute rounding).
 run_and_verify planes-options 2 "--rtol 1e-6 --atol 0.05"
+# Interior-only Silo slabs on 3 AMR levels and 4 ranks: the regression test for
+# the "silo_planes_ghosts = no unreadable in VisIt" bug -- with single-owner
+# membership some IO ranks emit no slab for a plane, which used to leave leaf
+# files VisIt rejects. 4 ranks (oversubscribed if needed) make that situation
+# near-certain; the VisIt gate checks the produced files block-by-block.
+run_and_verify planes-amr-noghosts 4 "--rtol 1e-6 --atol 0.05"
 
 echo "================================================================"
 echo "✓ plane verification passed"
