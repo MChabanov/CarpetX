@@ -77,3 +77,47 @@ jobs:
           name: plane-output
           path: ${{env.PLANES_DIR}}
           retention-days: 7
+
+      - name: Cache VisIt
+        # The numeric verifier reads leaf files directly and never opens the
+        # metafile/multimesh the way VisIt does; three metafile-class bugs
+        # (mrgtree empty-child-map crash, 3D mrgTree name mismatch,
+        # interior-mode unreadable leaf files) were invisible to it. Gate CI
+        # on driving an actual headless VisIt over every produced database.
+        if: ${{matrix.accelerator == 'cpu' && matrix.real-precision == 'real64' && matrix.mode == 'optimize'}}
+        uses: actions/cache@v4
+        with:
+          path: visit3_4_2.linux-x86_64-debian12.tar.gz
+          key: visit-3.4.2-debian12
+
+      - name: Install VisIt
+        if: ${{matrix.accelerator == 'cpu' && matrix.real-precision == 'real64' && matrix.mode == 'optimize'}}
+        run: |
+          if [ ! -f visit3_4_2.linux-x86_64-debian12.tar.gz ]; then
+            wget -nv https://github.com/visit-dav/visit/releases/download/v3.4.2/visit3_4_2.linux-x86_64-debian12.tar.gz
+          fi
+          tar xzf visit3_4_2.linux-x86_64-debian12.tar.gz -C /opt
+          /opt/visit3_4_2.linux-x86_64/bin/visit -version
+
+      - name: Check plane output with VisIt
+        # visit-check-planes.py opens every Silo metafile (multimesh + AMR
+        # mrgtree), every leaf .silo file, and every openPMD .h5 plane file,
+        # plots them, and queries the actual plotted data (an all-white draw
+        # fails). VisIt's CLI launcher mangles the script's exit code
+        # (observed 250 on success), so gate on the printed summary line.
+        if: ${{matrix.accelerator == 'cpu' && matrix.real-precision == 'real64' && matrix.mode == 'optimize'}}
+        run: |
+          /opt/visit3_4_2.linux-x86_64/bin/visit -nowin -cli \
+            -s "$GITHUB_WORKSPACE/scripts/visit-check-planes.py" \
+            "$PLANES_DIR" "$GITHUB_WORKSPACE/plane-renders" \
+            2>&1 | tee visit-check.log || true
+          grep -E 'checked [1-9][0-9]* databases, 0 failure\(s\)' visit-check.log
+
+      - name: Upload VisIt renders
+        if: ${{always() && matrix.accelerator == 'cpu' && matrix.real-precision == 'real64' && matrix.mode == 'optimize'}}
+        uses: actions/upload-artifact@v4
+        with:
+          name: plane-renders
+          path: plane-renders
+          retention-days: 7
+          if-no-files-found: ignore
