@@ -299,18 +299,31 @@ void OutputSiloPlanes(const cGH *const cctkGH,
     ierr = CCTK_CreateDirectory(0755, pathname.c_str());
     assert(ierr >= 0);
 
+    // The leaf file is created lazily, on the first slab this rank actually
+    // writes for this plane: an IO rank that owns no intersecting box would
+    // otherwise leave a file holding only the plane-location arrays and no
+    // mesh/var object, which VisIt's Silo reader rejects at open time ("It
+    // may be an invalid file"). With silo_planes_ghosts=no the single-owner
+    // membership makes such ranks routine (the production failure mode); with
+    // ghosts they occur on any run large enough that some rank's boxes all
+    // miss the plane. The metafile references only files of ranks that own a
+    // slab, so the never-created files are never referenced.
     DB::ptr<DBfile> file;
-    if (write_file) {
-      const std::string filename =
-          pathname + "/" +
-          make_plane_filename(output_file, plane.tag, cctk_iteration,
-                              myproc / ioproc_every);
-      file = DB::make(DBCreate(filename.c_str(), DB_CLOBBER, DB_LOCAL,
-                               output_file.c_str(), DB_HDF5));
-      assert(file);
+    const auto ensure_file = [&]() {
+      assert(write_file);
+      if (!file) {
+        const std::string filename =
+            pathname + "/" +
+            make_plane_filename(output_file, plane.tag, cctk_iteration,
+                                myproc / ioproc_every);
+        file = DB::make(DBCreate(filename.c_str(), DB_CLOBBER, DB_LOCAL,
+                                 output_file.c_str(), DB_HDF5));
+        assert(file);
 
-      write_plane_location(file.get(), plane);
-    }
+        write_plane_location(file.get(), plane);
+      }
+      return file.get();
+    };
 
     bool any_slab_emitted = false;
 
@@ -442,6 +455,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               continue;
 
             any_slab_emitted = true;
+            DBfile *const leaf_file = ensure_file();
 
             // Optional single-precision conversion of the gathered slab.
             std::vector<float> float_buf;
@@ -503,7 +517,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                                  &hide_from_gui);
               assert(!ierr);
 
-              ierr = DBPutQuadmesh(file.get(), meshname.c_str(), nullptr,
+              ierr = DBPutQuadmesh(leaf_file, meshname.c_str(), nullptr,
                                    coord_ptrs.data(), dims_vc.data(),
                                    planes_ndims, db_datatype_v<CCTK_REAL>,
                                    DB_COLLINEAR, optlist.get());
@@ -545,7 +559,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                                                   vi * zonecount)
                       : static_cast<const void *>(data + vi * zonecount);
               ierr = DBPutQuadvar1(
-                  file.get(), varname.c_str(), meshname.c_str(), data_ptr,
+                  leaf_file, varname.c_str(), meshname.c_str(), data_ptr,
                   dims.data(), planes_ndims, nullptr, 0,
                   single_precision ? DB_FLOAT : db_datatype_v<CCTK_REAL>,
                   centering, var_optlist.get());
