@@ -325,8 +325,6 @@ void OutputSiloPlanes(const cGH *const cctkGH,
       return file.get();
     };
 
-    bool any_slab_emitted = false;
-
     for (const auto &patchdata : ghext->patchdata) {
       if (!patchdata.is_cartesian) {
         if (warned_noncart_patches.insert(patchdata.patch).second)
@@ -454,8 +452,11 @@ void OutputSiloPlanes(const cGH *const cctkGH,
             if (!write_this_fab)
               continue;
 
-            any_slab_emitted = true;
             DBfile *const leaf_file = ensure_file();
+
+            const std::string meshname = make_plane_meshname(
+                plane.tag, centering_tag, mesh_props.nghosts, patchdata.patch,
+                leveldata.level, component);
 
             // Optional single-precision conversion of the gathered slab.
             std::vector<float> float_buf;
@@ -484,10 +485,6 @@ void OutputSiloPlanes(const cGH *const cctkGH,
                       x0[ax] + (databox.smallEnd(ax) + i + offset) * dx[ax];
                 coord_ptrs[d] = coords[d].data();
               }
-
-              const std::string meshname = make_plane_meshname(
-                  plane.tag, centering_tag, mesh_props.nghosts, patchdata.patch,
-                  leveldata.level, component);
 
               const DB::ptr<DBoptlist> optlist = DB::make(DBMakeOptlist(10));
               assert(optlist);
@@ -524,10 +521,6 @@ void OutputSiloPlanes(const cGH *const cctkGH,
               assert(!ierr);
               have_meshes.insert(mesh_props);
             }
-
-            const std::string meshname = make_plane_meshname(
-                plane.tag, centering_tag, mesh_props.nghosts, patchdata.patch,
-                leveldata.level, component);
 
             const DB::ptr<DBoptlist> var_optlist = DB::make(DBMakeOptlist(10));
             assert(var_optlist);
@@ -571,12 +564,13 @@ void OutputSiloPlanes(const cGH *const cctkGH,
     }
 
     // The geometric pre-check above already wrote no file for a plane outside
-    // every level, so reaching here means the plane is in domain. Since
-    // any_slab_emitted is per-rank, a rank that owns no intersecting box
-    // legitimately emits nothing; only warn if NO rank emitted anything (a real
-    // inconsistency), and only from the metafile rank to avoid duplicates.
+    // every level, so reaching here means the plane is in domain. The leaf
+    // file exists iff this rank emitted a slab (lazy creation above); a rank
+    // that owns no intersecting box legitimately emits nothing. Only warn if
+    // NO rank emitted anything (a real inconsistency), and only from the
+    // metafile rank to avoid duplicates.
     {
-      int local_emitted = any_slab_emitted ? 1 : 0;
+      int local_emitted = file ? 1 : 0;
       int global_emitted = 0;
       MPI_Allreduce(&local_emitted, &global_emitted, 1, MPI_INT, MPI_LOR,
                     mpi_comm);

@@ -213,7 +213,13 @@ harder to hit at test scale.
 actually writes (`ensure_file` in `silo_planes.cxx`); ranks without a slab
 create nothing. The metafile references only files of slab-owning ranks, so
 the never-created files were never referenced — directory contents now match
-the references exactly.
+the references exactly. *Note:* this makes the agreement of the two passes'
+independently re-derived slab membership (leaf pass per-rank loop vs metafile
+`slabs` gather) load-bearing; today they mirror each other line-for-line
+(`owner_cell` / `slice_idx` / databox tests) and the CI VisIt gate would catch
+a drift, but a future refactor should compute one shared slab list and drive
+both passes from it (same factoring argument as for the mrgtree construction
+above).
 
 Why the test suite never caught it: `planes-options.par` — previously the
 only ghosts=no coverage — is single-level on 2 ranks (every rank owns a

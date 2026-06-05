@@ -82,10 +82,7 @@ def draw_has_data():
         mm = GetQueryOutputValue()  # noqa: F821
     except Exception:  # noqa: BLE001
         return False, "MinMax query failed"
-    try:
-        vals = list(mm) if hasattr(mm, "__iter__") else [mm]
-    except TypeError:
-        vals = [mm]
+    vals = list(mm) if hasattr(mm, "__iter__") else [mm]
     if not vals or not all(math.isfinite(float(v)) for v in vals):
         return False, "non-finite MinMax %r" % (mm,)
     return True, "zones=%d minmax=%s" % (int(nzones), vals)
@@ -131,6 +128,11 @@ def check_db(db, cap, save_image):
     except Exception as exc:  # noqa: BLE001
         failures.append(rel)
         print("FAIL %-72s %s" % (rel, exc))
+        try:  # don't leak the database into the rest of the sweep
+            DeleteAllPlots()  # noqa: F821
+            CloseDatabase(db)  # noqa: F821
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # Silo metafile time-series indexes: the full multimesh/multivar (+ mrgtree
