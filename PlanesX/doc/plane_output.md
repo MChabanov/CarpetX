@@ -44,7 +44,7 @@ options, iteration encoding, units, mesh/component naming) are mirrored from
 | `PlanesX::openpmd_planes` / `_plane_vars` / `_planes_every` | — | Same, for openPMD |
 | `PlanesX::planes_int_precision` | `4` | Min integer digits in tag |
 | `PlanesX::planes_frac_precision` | `3` | Fractional digits in tag |
-| `PlanesX::silo_planes_ghosts` | `yes` | `no`: interior-only Silo slabs (smaller files; VisIt may show box seams) |
+| `PlanesX::silo_planes_ghosts` | `yes` | `no`: interior-only Silo slabs (smaller files; VisIt may show box seams). **Known issue:** `no` currently breaks VisIt on many-rank AMR runs — see *interior-only output unreadable in VisIt* below |
 | `PlanesX::silo_planes_single_precision` | `default` | `yes`/`no`/`default` (= follow `IO::out_single_precision`); Silo data as `DB_FLOAT`. openPMD planes are always `CCTK_REAL` |
 
 Spec syntax: `<axes>:<elevation>`, comma-separated; `<elevation>` is the
@@ -189,6 +189,48 @@ single-level plane output.
    again. A cheaper CI safety net: have the verifier also open the metafile
    multimesh (not just the leaf files) so a tree VisIt would reject fails the
    test.
+
+### KNOWN ISSUE: interior-only output (`silo_planes_ghosts = no`) unreadable in VisIt
+
+Observed 2026-06-05 on a many-rank Frontier production run (multi-level AMR,
+`silo_planes_ghosts = no` + `silo_planes_single_precision = yes`, viewed with
+VisIt 3.4 in client/server mode); **not yet root-caused or fixed**:
+
+- A leaf file (`…silo_planes.dir/….p000030.silo`) fails VisIt's Silo reader at
+  *open* time ("It may be an invalid file"), not at a read of some object
+  inside it.
+- Opening the metafile via the `.silo_planes.visit` index, every Pseudocolor
+  plot renders **all white** while the colorbar still shows plausible min/max —
+  the limits come from the metafile's `DBOPT_EXTENTS` multivar metadata, which
+  VisIt reads without touching leaf data; the Subset window reports no data.
+- The **same run re-done with `silo_planes_ghosts = yes` (the default) is
+  fine**. `silo_planes_single_precision` has not been isolated but is almost
+  certainly innocent (it only switches leaf data arrays to `DB_FLOAT`).
+
+Why the test suite never caught it: `planes-options.par` — the only
+ghosts=no coverage — is single-level on 2 ranks and is verified numerically
+through `plane_readers/silo_reader.py`, which reads the leaf HDF5 components
+directly (h5py) and never exercises a `DBOpen`-level open the way VisIt does;
+`scripts/visit-check-planes.py` opens only the *first* leaf per directory and
+counts a successful (even all-white) draw as a pass, and is not in CI.
+
+Leading suspicion (unverified): `OutputSiloPlanes` `DBCreate`s a leaf file on
+every IO rank for every in-domain plane *before* knowing whether the rank
+emits any slab (`silo_planes.cxx`, leaf pass). With ghosts=no the
+single-owner-box membership means most ranks of a large run emit nothing into
+a given plane's file, leaving leaf files that contain only the
+plane-location arrays and no mesh/var objects — which VisIt's Silo plugin may
+reject as invalid, and one rejected block file may abort the whole multimesh
+draw. An alternative candidate is a leaf-pass vs metafile-gather-pass
+membership disagreement in interior mode (the `owner_cell` logic), which would
+make the metafile reference objects that were never written.
+
+**Until this is fixed, use the default `silo_planes_ghosts = yes` for any
+Silo plane output that VisIt will read.** When fixing: reproduce with
+`planes-amr.par` + the two `planes-options.par` flags on ≥2 ranks, inspect the
+leaf files (`h5ls`, Silo `browser`), and harden
+`scripts/visit-check-planes.py` to open *every* leaf file and to flag
+all-white draws (e.g. compare MinMax over actual vs original data).
 
 ## Testing (thorn `TestPlanesX`)
 
