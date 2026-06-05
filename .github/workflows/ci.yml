@@ -97,25 +97,33 @@ jobs:
           # system X11/fontconfig/GL/dbus layer, which the carpetx container
           # lacks (the viewer otherwise dies with "libfontconfig.so.1: cannot
           # open shared object file" and the CLI waits forever).
-          apt-get update -qq
-          apt-get install -y -qq --no-install-recommends \
-            libfontconfig1 libfreetype6 libharfbuzz0b libdbus-1-3 \
-            libgl1 libegl1 libopengl0 libglx0 \
-            libx11-6 libxext6 libxrender1 libxkbcommon0 libsm6 libice6 \
-            libdouble-conversion3 libmd4c0 libb2-1 libbrotli1
-          # glib's package name went through the 64-bit time_t transition.
-          apt-get install -y -qq --no-install-recommends libglib2.0-0t64 \
-            || apt-get install -y -qq --no-install-recommends libglib2.0-0
+          # Per-package with || so one bad name / repo hiccup cannot kill the
+          # step; the ldd scan and the smoke test below are the real gates
+          # and print exactly what is still missing. (libglib2.0-0t64 vs
+          # libglib2.0-0: the 64-bit time_t package rename.)
+          apt-get update -qq || echo "::warning::apt-get update failed"
+          for p in libfontconfig1 libfreetype6 libharfbuzz0b libdbus-1-3 \
+                   libgl1 libegl1 libopengl0 libglx0 \
+                   libx11-6 libxext6 libxrender1 libxkbcommon0 libsm6 libice6 \
+                   libdouble-conversion3 libmd4c0 libb2-1 libbrotli1 \
+                   libglib2.0-0t64 libglib2.0-0; do
+            apt-get install -y -qq --no-install-recommends "$p" \
+              || echo "::warning::could not install $p"
+          done
           if [ ! -f visit3_4_2.linux-x86_64-debian12.tar.gz ]; then
             wget -nv https://github.com/visit-dav/visit/releases/download/v3.4.2/visit3_4_2.linux-x86_64-debian12.tar.gz
           fi
           tar xzf visit3_4_2.linux-x86_64-debian12.tar.gz -C /opt
           /opt/visit3_4_2.linux-x86_64/bin/visit -version
-          # Fail fast (with diagnostics) if any component still misses libs:
-          # the launcher above only runs the shell frontend, not the viewer.
+          # Diagnostic only: list libraries that are still unresolvable. The
+          # launcher provides VisIt's bundled libs via LD_LIBRARY_PATH (no
+          # rpath), so resolve against the install's lib dir; anything still
+          # "not found" is a missing SYSTEM library. The smoke test below is
+          # the gate -- it exercises the real cli+viewer startup.
+          vdir=/opt/visit3_4_2.linux-x86_64/3.4.2/linux-x86_64
           for b in viewer cli mdserver engine_ser; do
-            ldd /opt/visit3_4_2.linux-x86_64/3.4.2/linux-x86_64/bin/$b 2>/dev/null \
-              | grep "not found" && { echo "missing libraries for $b"; exit 1; }
+            LD_LIBRARY_PATH="$vdir/lib:$vdir/lib/mesagl" ldd "$vdir/bin/$b" 2>/dev/null \
+              | grep "not found" | sed "s/^/::warning::$b: /" || true
           done
           echo 'print("visit cli+viewer smoke OK"); import sys; sys.exit(0)' > /tmp/visit-smoke.py
           timeout 300 /opt/visit3_4_2.linux-x86_64/bin/visit -nowin -cli \
