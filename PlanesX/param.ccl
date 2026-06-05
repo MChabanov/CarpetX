@@ -46,6 +46,10 @@ BOOLEAN silo_planes_ghosts "Include ghost zones in Silo plane output (no: interi
 {
 } yes
 
+BOOLEAN silo_planes_nameschemes "Use Silo nameschemes in the plane metafiles (one printf-like pattern plus small index arrays instead of one explicit string per block and variable; metafile size becomes independent of block count; needs Silo >= 4.8 readers, any VisIt of the last decade)" STEERABLE=always
+{
+} no
+
 KEYWORD silo_planes_single_precision "Write Silo plane data in single precision (openPMD planes are always CCTK_REAL)" STEERABLE=always
 {
   "default" :: "follow IO::out_single_precision"
