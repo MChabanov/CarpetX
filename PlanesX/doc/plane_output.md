@@ -271,6 +271,79 @@ Upstream CarpetX (lwJi/dev) later grew an independent 2D slice capability
 keeps the per-level snapping, arbitrary per-plane elevations, mrgtree
 shadowing and the TestPlanesX verification described here.
 
+## CarpetX openPMD + HDF5 checkpointing: known issues (review 2026-06-05)
+
+Findings from a review of the checkpoint/recovery path (`CarpetX/src/io.cxx`
+`Checkpoint`/`RecoverGH`, `CarpetX/src/io_openpmd.cxx`), done after the
+collective-metadata fix (#90, `e538ceec` + `e4e197ff`) landed. Recorded here
+because the plane writer mirrors the same openPMD conventions and the HDF5
+deadlock class was first found via PlanesX. Metadata rank-symmetry now checks
+out: band MultiFab allocation is driven by global BoxArrays
+(`driver.cxx:1076-1092`), `write_bands` comes from replicated level
+iterations, and the walltime checkpoint trigger is broadcast (`io.cxx:800`).
+The following issues remain, none yet fixed:
+
+1. **HDF5 64 KB attribute limit vs. `AllParameters` and `chunkInfo`
+   (likely hard failure at scale).** The checkpoint stores the full parameter
+   dump as a single string attribute (`io_openpmd.cxx:1564`) and the grid
+   structure as one `chunkInfo<patch><level>` int64-vector attribute per level
+   (`io_openpmd.cxx:1605`). HDF5 attributes live in the object header
+   (≤64 KB per message unless dense attribute storage is enabled, which
+   openPMD-api does not do). `chunkInfo` is 48 bytes/box → fails beyond
+   ~1,350 boxes on a level; a production ET `AllParameters` dump can also
+   exceed 64 KB. ADIOS2 has no such limit, which is why the default
+   `openpmd_format = "ADIOS2_auto"` never hits it. (Same hazard class applies
+   to the PlanesX per-level `chunkInfo` attributes when writing `.h5` planes.)
+   First thing to test: small `max_grid_size`, >1,400 boxes, `.h5` checkpoint.
+
+2. **No checkpoint atomicity, no fallback past a corrupt file.**
+   `InputOpenPMDParameters` catches only `openPMD::no_such_file_error`
+   (`io_openpmd.cxx:524`) and always recovers the *largest* iteration —
+   exactly the file a mid-checkpoint kill truncates. Worse, fileBased series
+   parsing opens every `%08T` match, so one corrupt file in `checkpoint_dir`
+   aborts recovery even when older good checkpoints exist. No
+   write-to-temp-then-rename. HDF5 is the most exposed backend (file is
+   unreadable until the metadata flush at close).
+
+3. **Hard dependency on HDF5 *independent* raw-data writes.** Post-#90,
+   correctness relies on the openPMD default `OPENPMD_HDF5_INDEPENDENT=ON`:
+   the number of H5Dwrite calls per dataset is rank-asymmetric (per-rank fab
+   counts, the rank-0-only grid-array data write at `io_openpmd.cxx:2139`,
+   sparse subcycling-band chunks). Flipping to collective transfers — a
+   common Lustre tuning — deadlocks checkpointing the same way the metadata
+   path used to. Should be documented in `param.ccl` or warned about at
+   startup.
+
+4. **Singleton state leak on the no-groups early return.** `InputOpenPMD`
+   returns early when no group is enabled (`io_openpmd.cxx:723`), *after*
+   `InputOpenPMDParameters` left the READ_ONLY series and `read_iter` open in
+   `carpetx_openpmd_t::self`; the next `OutputOpenPMD` then sees `series` set
+   and dies at `assert(write_iters)` (`io_openpmd.cxx:1543`). The early
+   return should close/reset the read state.
+
+5. **Latent ghost-offset bug in the non-GF read expansion.** The in-place
+   grid-array expansion (`io_openpmd.cxx:1328-1339`) omits the interior
+   offset `box.lo - extbox.lo` from the destination index; the GF path
+   applies it (`amrex_offset`, `io_openpmd.cxx:1024-1031`). Unreachable
+   today only because grid arrays have zero ghosts (`intbox == extbox`), but
+   checkpoint recovery is the code that would hit it.
+
+6. **Scaling caveats.** On recovery every rank parses the metadata of every
+   checkpoint file and independently reads the full replicated grid-array
+   data (`io_openpmd.cxx:1291-1310`) — N identical reads at N ranks. On
+   write: one dataset per (group, patch, level, tl, band) with one
+   independent H5Dwrite per fab per variable, unaggregated; the compression
+   `options` JSON configures ADIOS2 only (`io_openpmd.cxx:127-155`), so HDF5
+   checkpoints are uncompressed. Datasets are sized to the level bounding box
+   with fabs writing a sparse subset — fine for chunked HDF5 and for recovery
+   (which reads via `chunkInfo`), but generic openPMD readers see fill values
+   in uncovered regions of refined levels (same full-extent-chunk issue as
+   the plane reader's HDF5 caveat above).
+
+Items 4 and the error handling of 2 are self-contained fixes; 1 needs a
+format decision (store as dataset, split, or enable dense attribute
+storage upstream in openPMD-api).
+
 ## PLANNED: Silo nameschemes (+ CI VisIt gate)
 
 Status: planned, not started. Plan agreed 2026-06-05; execute in this order.
