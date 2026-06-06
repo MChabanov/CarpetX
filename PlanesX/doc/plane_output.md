@@ -44,9 +44,9 @@ options, iteration encoding, units, mesh/component naming) are mirrored from
 | `PlanesX::openpmd_planes` / `_plane_vars` / `_planes_every` | — | Same, for openPMD |
 | `PlanesX::planes_int_precision` | `4` | Min integer digits in tag |
 | `PlanesX::planes_frac_precision` | `3` | Fractional digits in tag |
-| `PlanesX::silo_planes_ghosts` | `yes` | `no`: interior-only Silo slabs (smaller files; VisIt may show box seams) |
+| `PlanesX::silo_planes_ghosts` | `no` | interior-only Silo slabs (smaller files; VisIt may show box seams); `yes`: ghost-extended slabs |
 | `PlanesX::silo_planes_single_precision` | `default` | `yes`/`no`/`default` (= follow `IO::out_single_precision`); Silo data as `DB_FLOAT`. openPMD planes are always `CCTK_REAL` |
-| `PlanesX::silo_planes_nameschemes` | `no` | `yes`: metafiles use Silo nameschemes (one pattern + small index arrays) instead of one explicit string per block and variable — metafile size independent of block count; see *Nameschemes* below |
+| `PlanesX::silo_planes_nameschemes` | `yes` | metafiles use Silo nameschemes (one pattern + small index arrays) instead of one explicit string per block and variable — metafile size independent of block count; see *Nameschemes* below |
 
 Spec syntax: `<axes>:<elevation>`, comma-separated; `<elevation>` is the
 world coordinate along the normal axis.
@@ -92,9 +92,10 @@ openPMD:
   <out_dir>/<sim>.<tag>.openpmd.visit         VisIt index
 ```
 
-- **Silo** includes ghost cells (`DBOPT_LO/HI_OFFSET` markers) unless
-  `silo_planes_ghosts = no` (interior-only; with 3 ghost zones the saving is
-  ~29% at 32² boxes and ~67% at 8² boxes). Data is `CCTK_REAL` or, with
+- **Silo** writes interior-only slabs by default; `silo_planes_ghosts = yes`
+  includes ghost cells (`DBOPT_LO/HI_OFFSET` markers; with 3 ghost zones the
+  interior-only saving is ~29% at 32² boxes and ~67% at 8² boxes). Data is
+  `CCTK_REAL` or, with
   `silo_planes_single_precision` (or `IO::out_single_precision`), `DB_FLOAT`
   (2× smaller; mesh coordinates and the recorded plane location stay double).
   The full `AllParameters` dump lives in the per-iteration **metafile only**
@@ -423,7 +424,7 @@ has zero zones or a non-finite MinMax (the all-white mode). Proven in anger:
 it caught the interior-mode empty-leaf bug (see FIXED above) on its first
 in-CI run.
 
-### Commit B — `PlanesX::silo_planes_nameschemes`: DONE (default `no` for one soak)
+### Commit B — `PlanesX::silo_planes_nameschemes`: DONE (default `yes` after the production soak)
 
 BOOLEAN parameter; metafile pass of `silo_planes.cxx` only. Per multimesh,
 the per-block integer arrays `<multimesh>_ns_{patch,level,comp,file}`
@@ -450,10 +451,14 @@ agreement is the expansion check's job. mrgtree, `DBOPT_EXTENTS`/
 `DBOPT_ZONECOUNTS`, region maps (block indices, not names) and leaf files
 are unchanged; the numeric verifier reads leaf files only.
 
-Tests: enabled in `planes-options.par` (single-level, plain multimesh) and
-`planes-amr-noghosts.par` (namescheme × AMR mrgtree × interior mode);
-`planes-amr.par` keeps explicit lists so both metafile forms stay covered by
-the CI VisIt gate. Flip the default only after a production soak.
+Tests: `planes-options.par` covers the single-level plain-multimesh form and
+`planes-amr-noghosts.par` the namescheme × AMR mrgtree × interior-mode
+combination; `planes-amr.par` pins the legacy ghost-extended +
+explicit-name-list form so both metafile forms stay covered by the CI VisIt
+gate. After a Frontier production soak (ghosts=yes and =no output with
+namescheme metafiles, visualised in VisIt client/server, 2026-06-06) the
+defaults were flipped: `silo_planes_ghosts = no` and
+`silo_planes_nameschemes = yes`.
 
 ### Commit C (later, optional) — upstream port
 

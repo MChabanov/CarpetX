@@ -103,6 +103,13 @@ PlanesX::silo_plane_vars = "
 PlanesX::silo_planes = "xy:6.0, xz:8.0, yz:4.0, xy:8.0, xz:10.0, yz:2.0, xy:14.0"
 PlanesX::silo_planes_every = 1
 
+# Pin the non-default ghost-extended slabs and explicit-name-list metafiles
+# (the defaults are interior-only + nameschemes): this parfile is the
+# coverage for the legacy metafile form and for ghost handling
+# (DBOPT_LO/HI_OFFSET, ghost-extended extents) in the CI VisIt gate.
+PlanesX::silo_planes_ghosts = yes
+PlanesX::silo_planes_nameschemes = no
+
 PlanesX::openpmd_plane_vars = "
     TestPlanesX::gf000
     TestPlanesX::gf001

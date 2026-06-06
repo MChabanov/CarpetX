@@ -1,7 +1,8 @@
-## Plane output with the non-default IO options enabled:
-##   PlanesX::silo_planes_ghosts = no            (interior-only Silo slabs)
-##   PlanesX::silo_planes_single_precision = yes (DB_FLOAT Silo data)
-##   CarpetX::openpmd_format = "HDF5"            (openPMD planes as .h5)
+## Plane output with the size-reducing IO options pinned explicitly:
+##   PlanesX::silo_planes_ghosts = no            (interior-only Silo slabs; default)
+##   PlanesX::silo_planes_single_precision = yes (DB_FLOAT Silo data; non-default)
+##   PlanesX::silo_planes_nameschemes = yes      (pattern metafiles; default)
+##   CarpetX::openpmd_format = "HDF5"            (openPMD planes as .h5; non-default)
 ##
 ## Same grid and analytic field as planes-single-level (see that parfile and
 ## thorn TestPlanesX). Run on 2 ranks so the interior-extent MPI gather
