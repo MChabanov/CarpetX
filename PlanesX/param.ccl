@@ -42,7 +42,11 @@ INT silo_planes_every "Output Silo plane data every that many iterations" STEERA
   1:* :: "every that many iterations"
 } -1
 
-BOOLEAN silo_planes_ghosts "Include ghost zones in Silo plane output (no: interior only, smaller files; VisIt may show seams at box boundaries)" STEERABLE=always
+BOOLEAN silo_planes_ghosts "Include ghost zones in Silo plane output (default no: interior only, smaller files; yes: VisIt-stitched box boundaries at the cost of duplicated ghost data)" STEERABLE=always
+{
+} no
+
+BOOLEAN silo_planes_nameschemes "Use Silo nameschemes in the plane metafiles (one printf-like pattern plus small index arrays instead of one explicit string per block and variable; metafile size becomes independent of block count; needs Silo >= 4.8 readers, any VisIt of the last decade; falls back to explicit name lists per object if the pattern does not reproduce the names)" STEERABLE=always
 {
 } yes
 

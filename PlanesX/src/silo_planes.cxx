@@ -32,7 +32,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
+#include <map>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -154,6 +156,48 @@ std::string make_plane_varname(int gi, int vi, const std::string &plane_tag,
         << std::setw(2) << std::setfill('0') << reflevel << ".c" << std::setw(8)
         << std::setfill('0') << component;
   return DB::legalize_name(buf.str());
+}
+
+// --- Nameschemes (silo_planes_nameschemes) ----------------------------------
+//
+// A Silo namescheme replaces a multi-block object's per-block string list
+// with one printf-like pattern ("|<pattern>|<expr>...") evaluated per block
+// index n; "#/<array>[n]" references an int array DBWrite-n into the same
+// file. The block -> (patch, level, component, file) mapping is irregular
+// (only intersecting components are listed), so external index arrays are
+// required. The expanded names must equal the explicit leaf names
+// byte-for-byte; rather than deriving the pattern correct-by-construction,
+// the writer expands every written namescheme through the same file-based
+// DBMakeNamescheme path VisIt uses and compares against the explicit list --
+// on any mismatch (or constructor failure) it falls back to writing the
+// explicit list, so a namescheme only ever lands in the file after being
+// proven equivalent.
+
+// The trailing index fields of the (legalized) per-block leaf object names
+// for block (patch, level, component) = (0, 0, 0).
+const char *const block000_suffix = "_m0000_rl00_c00000000";
+
+// True iff the pair (file namescheme, block namescheme) -- whose "#/..."
+// arrays must already be DBWritten to `file` -- expands, for every index, to
+// the explicit "<file>:<object>" name in `expected`.
+bool nameschemes_match(DBfile *const file, const std::string &file_ns,
+                       const std::string &block_ns,
+                       const std::vector<std::string> &expected) {
+  DBnamescheme *const fns = DBMakeNamescheme(file_ns.c_str(), 0, file, 0);
+  DBnamescheme *const bns = DBMakeNamescheme(block_ns.c_str(), 0, file, 0);
+  bool ok = fns && bns;
+  for (std::size_t i = 0; i < expected.size() && ok; ++i) {
+    // Copy: DBGetName returns a pointer into a small ring of static buffers.
+    const char *const f = DBGetName(fns, int(i));
+    const std::string fname = f ? f : "";
+    const char *const b = DBGetName(bns, int(i));
+    ok = b && expected[i] == fname + ":" + b;
+  }
+  if (fns)
+    DBFreeNamescheme(fns);
+  if (bns)
+    DBFreeNamescheme(bns);
+  return ok;
 }
 
 // Record the true location of the plane data in `file` (a per-plane Silo
@@ -608,7 +652,32 @@ void OutputSiloPlanes(const cGH *const cctkGH,
 
       write_plane_location(metafile.get(), plane);
 
-      std::set<plane_mesh_props_t> meta_have_meshes;
+      // Namescheme pattern builders: the explicit name for block index
+      // (patch, level, component) = (0, 0, 0) with its trailing index fields
+      // replaced by printf conversions, plus "#/<prefix>_ns_*[n]" external
+      // index arrays. Any construction subtlety (legalization, '%' or '|'
+      // inside a name) is caught by the expansion check before use, which
+      // then falls back to explicit name lists.
+      const auto make_file_ns = [&](const std::string &arrays_prefix) {
+        std::string f0 =
+            subdirname + "/" +
+            make_plane_filename(output_file, plane.tag, cctk_iteration, 0);
+        f0.replace(f0.size() - std::strlen(".p000000.silo"), std::string::npos,
+                   ".p%06d.silo");
+        return "|" + f0 + "|#/" + arrays_prefix + "_ns_file[n]";
+      };
+      const auto make_block_ns = [&](std::string name000,
+                                     const std::string &arrays_prefix) {
+        name000.replace(name000.size() - std::strlen(block000_suffix),
+                        std::string::npos, "_m%04d_rl%02d_c%08d");
+        return "|" + name000 + "|#/" + arrays_prefix + "_ns_patch[n]|#/" +
+               arrays_prefix + "_ns_level[n]|#/" + arrays_prefix +
+               "_ns_comp[n]";
+      };
+
+      // Per mesh_props: the block count its multimesh was written with when
+      // nameschemes were used, 0 when explicit name lists were written.
+      std::map<plane_mesh_props_t, int> meta_meshes;
       for (int gi = 0; gi < CCTK_NumGroups(); ++gi) {
         if (!output_group.at(gi))
           continue;
@@ -750,7 +819,7 @@ void OutputSiloPlanes(const cGH *const cctkGH,
           continue;
         const int ncomps_total = int(slabs.size());
 
-        if (!meta_have_meshes.count(mesh_props)) {
+        if (!meta_meshes.count(mesh_props)) {
           const std::string multimeshname =
               make_plane_meshname(plane.tag, centering_tag, mesh_props.nghosts);
           const std::string levelmaps_name =
@@ -1063,44 +1132,138 @@ void OutputSiloPlanes(const cGH *const cctkGH,
             assert(!ierr);
           }
 
-          ierr = DBPutMultimesh(metafile.get(), multimeshname.c_str(),
-                                int(meshname_ptrs.size()), meshname_ptrs.data(),
-                                nullptr, optlist.get());
+          // Nameschemes: write the per-block index arrays, then use the
+          // patterns only if their file-based expansion reproduces the
+          // explicit names (see nameschemes_match above); otherwise fall
+          // back to the explicit list.
+          int mesh_ns_nblocks = 0;
+          std::string file_ns, mesh_ns; // must outlive DBPutMultimesh
+          if (silo_planes_nameschemes) {
+            std::vector<int> ns_patch(ncomps_total), ns_level(ncomps_total),
+                ns_comp(ncomps_total), ns_file(ncomps_total);
+            for (int i = 0; i < ncomps_total; ++i) {
+              ns_patch[i] = slabs[i].patch;
+              ns_level[i] = slabs[i].level;
+              ns_comp[i] = slabs[i].component;
+              ns_file[i] = slabs[i].proc / ioproc_every;
+            }
+            const int adims = ncomps_total;
+            ierr =
+                DBWrite(metafile.get(), (multimeshname + "_ns_patch").c_str(),
+                        ns_patch.data(), &adims, 1, DB_INT);
+            assert(!ierr);
+            ierr =
+                DBWrite(metafile.get(), (multimeshname + "_ns_level").c_str(),
+                        ns_level.data(), &adims, 1, DB_INT);
+            assert(!ierr);
+            ierr = DBWrite(metafile.get(), (multimeshname + "_ns_comp").c_str(),
+                           ns_comp.data(), &adims, 1, DB_INT);
+            assert(!ierr);
+            ierr = DBWrite(metafile.get(), (multimeshname + "_ns_file").c_str(),
+                           ns_file.data(), &adims, 1, DB_INT);
+            assert(!ierr);
+
+            file_ns = make_file_ns(multimeshname);
+            mesh_ns =
+                make_block_ns(make_plane_meshname(plane.tag, centering_tag,
+                                                  mesh_props.nghosts, 0, 0, 0),
+                              multimeshname);
+            if (nameschemes_match(metafile.get(), file_ns, mesh_ns,
+                                  meshnames)) {
+              mesh_ns_nblocks = ncomps_total;
+              ierr = DBAddOption(optlist.get(), DBOPT_MB_FILE_NS,
+                                 const_cast<char *>(file_ns.c_str()));
+              assert(!ierr);
+              ierr = DBAddOption(optlist.get(), DBOPT_MB_BLOCK_NS,
+                                 const_cast<char *>(mesh_ns.c_str()));
+              assert(!ierr);
+            } else {
+              CCTK_VWARN(CCTK_WARN_ALERT,
+                         "OutputSiloPlanes: namescheme expansion does not "
+                         "reproduce the explicit block names for multimesh "
+                         "%s; writing explicit name lists instead",
+                         multimeshname.c_str());
+            }
+          }
+
+          ierr = DBPutMultimesh(
+              metafile.get(), multimeshname.c_str(), ncomps_total,
+              mesh_ns_nblocks ? nullptr : meshname_ptrs.data(), nullptr,
+              optlist.get());
           assert(!ierr);
-          meta_have_meshes.insert(mesh_props);
+          meta_meshes[mesh_props] = mesh_ns_nblocks;
         }
 
         const std::string multimeshname =
             make_plane_meshname(plane.tag, centering_tag, mesh_props.nghosts);
-        const DB::ptr<DBoptlist> mv_optlist = DB::make(DBMakeOptlist(10));
-        assert(mv_optlist);
-        int cycle = cctk_iteration;
-        ierr = DBAddOption(mv_optlist.get(), DBOPT_CYCLE, &cycle);
-        assert(!ierr);
-        double dtime = cctk_time;
-        ierr = DBAddOption(mv_optlist.get(), DBOPT_DTIME, &dtime);
-        assert(!ierr);
-        ierr = DBAddOption(mv_optlist.get(), DBOPT_MMESH_NAME,
-                           const_cast<char *>(multimeshname.c_str()));
-        assert(!ierr);
-        int vartype_scalar = DB_VARTYPE_SCALAR;
-        ierr =
-            DBAddOption(mv_optlist.get(), DBOPT_TENSOR_RANK, &vartype_scalar);
-        assert(!ierr);
-        int quadvar = DB_QUADVAR;
-        ierr = DBAddOption(mv_optlist.get(), DBOPT_MB_BLOCK_TYPE, &quadvar);
-        assert(!ierr);
+        // The multivars can reuse the multimesh's index arrays only when this
+        // group's block list has the same length as the one the arrays were
+        // written for (membership is mirrored across groups by the owner-cell
+        // design; the expansion check guards the contents, but indexing an
+        // external array out of range is undefined, so the length is checked
+        // first). A multimesh written with explicit lists has no arrays.
+        const bool try_var_ns = silo_planes_nameschemes &&
+                                meta_meshes.at(mesh_props) == ncomps_total;
+        // The file namescheme is the same for every variable of the group.
+        const std::string vfile_ns =
+            try_var_ns ? make_file_ns(multimeshname) : std::string();
 
         for (int vi = 0; vi < numvars; ++vi) {
           const std::string multivarname =
               make_plane_varname(gi, vi, plane.tag);
+
+          const DB::ptr<DBoptlist> mv_optlist = DB::make(DBMakeOptlist(10));
+          assert(mv_optlist);
+          int cycle = cctk_iteration;
+          ierr = DBAddOption(mv_optlist.get(), DBOPT_CYCLE, &cycle);
+          assert(!ierr);
+          double dtime = cctk_time;
+          ierr = DBAddOption(mv_optlist.get(), DBOPT_DTIME, &dtime);
+          assert(!ierr);
+          ierr = DBAddOption(mv_optlist.get(), DBOPT_MMESH_NAME,
+                             const_cast<char *>(multimeshname.c_str()));
+          assert(!ierr);
+          int vartype_scalar = DB_VARTYPE_SCALAR;
+          ierr =
+              DBAddOption(mv_optlist.get(), DBOPT_TENSOR_RANK, &vartype_scalar);
+          assert(!ierr);
+          int quadvar = DB_QUADVAR;
+          ierr = DBAddOption(mv_optlist.get(), DBOPT_MB_BLOCK_TYPE, &quadvar);
+          assert(!ierr);
+
+          bool var_ns_ok = false;
+          std::string var_ns; // must outlive DBPutMultivar
+          if (try_var_ns) {
+            var_ns = make_block_ns(
+                make_plane_varname(gi, vi, plane.tag, 0, 0, 0), multimeshname);
+            var_ns_ok = nameschemes_match(metafile.get(), vfile_ns, var_ns,
+                                          varnames_per_var[vi]);
+            if (var_ns_ok) {
+              ierr = DBAddOption(mv_optlist.get(), DBOPT_MB_FILE_NS,
+                                 const_cast<char *>(vfile_ns.c_str()));
+              assert(!ierr);
+              ierr = DBAddOption(mv_optlist.get(), DBOPT_MB_BLOCK_NS,
+                                 const_cast<char *>(var_ns.c_str()));
+              assert(!ierr);
+            } else {
+              CCTK_VWARN(CCTK_WARN_ALERT,
+                         "OutputSiloPlanes: namescheme expansion does not "
+                         "reproduce the explicit block names for multivar "
+                         "%s; writing explicit name lists instead",
+                         multivarname.c_str());
+            }
+          }
+
           std::vector<const char *> varname_ptrs;
-          varname_ptrs.reserve(varnames_per_var[vi].size());
-          for (const auto &s : varnames_per_var[vi])
-            varname_ptrs.push_back(s.c_str());
-          ierr = DBPutMultivar(metafile.get(), multivarname.c_str(),
-                               int(varname_ptrs.size()), varname_ptrs.data(),
-                               nullptr, mv_optlist.get());
+          if (!var_ns_ok) {
+            varname_ptrs.reserve(varnames_per_var[vi].size());
+            for (const auto &s : varnames_per_var[vi])
+              varname_ptrs.push_back(s.c_str());
+          }
+          ierr =
+              DBPutMultivar(metafile.get(), multivarname.c_str(), ncomps_total,
+                            var_ns_ok ? nullptr : varname_ptrs.data(), nullptr,
+                            mv_optlist.get());
           assert(!ierr);
         }
       }
