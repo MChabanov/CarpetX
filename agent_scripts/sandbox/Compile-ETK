@@ -1,0 +1,123 @@
+#!/bin/bash
+
+# Vendored copy of ~/bin/Compile-ETK for the sbx sandbox image.
+# Differences from the original:
+# - uses make when gmake is not available (Ubuntu has no gmake)
+# - creates the configuration automatically when configs/<name> does
+#   not exist yet, so the first build in a fresh sandbox works without
+#   an explicit --fresh
+# - passes THORNLIST= during configure so Cactus does not autogenerate
+#   a list of every thorn in arrangements/ (whose CST run fails)
+
+# ----------------
+# Global Functions
+# ----------------
+
+# Execute and print the command
+execute_command() {
+    echo "\$ $@"
+    "$@"
+}
+export -f execute_command
+
+# ---------------
+# Local Functions
+# ---------------
+
+# Help message
+display_usage() {
+    echo "Usage: $0 [options]"
+    echo
+    echo "Options:"
+    echo "  -h, --help       Show this help message and exit"
+    echo "  --fresh          Perform a fresh compilation"
+    echo "  -e <executable>  Specify the executable name (default: $executable_name)"
+    echo "  -t <thorn_list>  Specify the thorn list file (default: $thorn_list)"
+    echo "  -c <config_file> Specify the configuration file (default: $config_file)"
+    echo "  -j <num_cores>   Specify the number of cores for parallel build (default: $num_cores)"
+    echo
+    echo "All arguments are optional. If not specified, default values are used."
+}
+
+# Handle argument parsing
+process_arguments() {
+    local args=()
+
+    # Preprocess long options
+    for arg in "$@"; do
+        case "$arg" in
+            --fresh)
+                perform_fresh_compile=true ;;
+            --help)
+                display_usage; exit 0 ;;
+            *)
+                args+=("$arg") ;;
+        esac
+    done
+
+    # Reset positional arguments for `getopts`
+    set -- "${args[@]}"
+
+    # Parse short options
+    while getopts ":e:t:c:j:h" opt; do
+        case "$opt" in
+            e) executable_name="$OPTARG" ;;
+            t) thorn_list="$OPTARG" ;;
+            c) config_file="$OPTARG" ;;
+            j) num_cores="$OPTARG" ;;
+            h) display_usage; exit 0 ;;
+            :) echo "Error: Option -$OPTARG requires an argument." >&2; display_usage; exit 1 ;;
+            \?) echo "Error: Invalid option -$OPTARG" >&2; display_usage; exit 1 ;;
+        esac
+    done
+}
+
+# -------------
+# Main Function
+# -------------
+
+main() {
+    # Default values
+    executable_name="etk"
+    thorn_list="thornlists/asterx.th"
+    config_file="${ETKCFG:-${ETKGUIDE}/gcc/vista.cfg}"
+    perform_fresh_compile=false
+    num_cores=8
+
+    # Process arguments
+    process_arguments "$@"
+
+    MAKE=$(command -v gmake || command -v make)
+
+    config_path="configs/$executable_name"
+
+    # A missing configuration needs the fresh-compile setup step
+    if [[ ! -d "$config_path" ]]; then
+        perform_fresh_compile=true
+    fi
+
+    # Main script logic
+    if [[ $perform_fresh_compile == true ]]; then
+        echo "Performing a fresh compile for '$executable_name' with $config_file using $num_cores cores..."
+
+        # Remove existing config directory
+        if [[ -d "$config_path" ]]; then
+            echo "Removing existing directory: $config_path"
+            execute_command rm -rf "$config_path"
+        fi
+
+        # Fresh compile steps
+        # PROMPT=no: skip Cactus' interactive "Setup configuration (yes)?"
+        # confirmation, which auto-cancels when stdin is not a terminal
+        # THORNLIST=: without it Cactus generates a default list of every
+        # thorn in arrangements/, whose CST run fails
+        execute_command "$MAKE" "$executable_name" options="$config_file" THORNLIST="$thorn_list" PROMPT=no
+    fi
+
+    # Compilation with specified cores
+    execute_command cp "$thorn_list" "configs/$executable_name/ThornList"
+    execute_command "$MAKE" -j"$num_cores" "$executable_name" PROMPT=no
+}
+
+# Entry point
+main "$@"

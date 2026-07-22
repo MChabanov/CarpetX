@@ -15,7 +15,20 @@ Do **not** read reference test data files (e.g. `*/test/*/*.tsv`, `*/test/*/*.h5
 ./agent_scripts/test.sh
 ```
 
+An incremental build takes ~30 s and the testsuite ~1 min, but a from-clean build takes ~5 min — give `build.sh` a 10-minute timeout.
+
 To access test logs and build artifacts, read `./agent_docs/accessing-logs-and-artifacts.md`. To generate reference output for a new test, read `./agent_docs/generating-reference-output.md`.
+
+### Inside an sbx sandbox
+
+The same two scripts work unchanged inside a Docker Sandboxes (sbx) microVM created from the committed template (recipe and full instructions: `agent_scripts/sandbox/README.md`):
+
+```bash
+sbx run -t lwji/sandbox-templates:claude-carpetx --name claude-CarpetX claude . ../amrex:ro   # on the host, from the repo root
+agent_scripts/sandbox/setup.sh                                     # in-sandbox, once per sandbox (~30 s)
+```
+
+The first in-sandbox `build.sh` configures and compiles from scratch (~13 min — give it a 30-minute timeout); the named sandbox persists the build across stop/start, so later builds are incremental (~10 s) and the testsuite takes ~25 s.
 
 ## Commit & Pull Request Guidelines
 

@@ -1,14 +1,13 @@
 # How to generate reference output for a new test
 
-Tests are auto-discovered from `<Thorn>/test/*.par` and compared against a checked-in reference directory of the same basename (`<Thorn>/test/<test>/`). To create that reference for a new `.par`, run the built executable on the par file once inside the container and copy the resulting output dir into the test tree.
+Tests are auto-discovered from `<Thorn>/test/*.par` and compared against a checked-in reference directory of the same basename (`<Thorn>/test/<test>/`). To create that reference for a new `.par`, run the built executable on the par file once and copy the resulting output dir into the test tree.
 
-The scripts and executable run inside the running container named `$CONTAINERLOCAL`; `$CONTAINERLOCAL` and `$CONTAINERLOCALCACTUS` are pre-set in the host shell. The repo is bind-mounted into the container at `$CONTAINERLOCALCACTUS/../../workspace/repos/CarpetX` (the same files visible on the host under the primary working directory), so output written there appears on the host immediately.
+Everything runs on the host: `$CACTUSX` (pre-set in the host shell) is the Cactus tree, this repo is symlinked into it at `$CACTUSX/arrangements/CarpetX`, and the executable is `$CACTUSX/exe/cactus_carpetx`.
 
 ```bash
 # Run the par file; with IO::out_dir = $parfile the output lands in ./<test>/
-docker exec -e CONTAINERLOCALCACTUS="$CONTAINERLOCALCACTUS" "$CONTAINERLOCAL" zsh -c '
-  cd "$CONTAINERLOCALCACTUS/../../workspace/repos/CarpetX/<Thorn>/test" &&
-  "$CONTAINERLOCALCACTUS/exe/cactus_sim-carpetx" <test>.par'
+cd <repo>/<Thorn>/test &&
+  "$CACTUSX/exe/cactus_carpetx" <test>.par
 ```
 
 Then curate the generated `<Thorn>/test/<test>/` directory to mirror an existing reference of the same family before checking it in:
