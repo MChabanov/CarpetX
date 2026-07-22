@@ -40,6 +40,13 @@ jobs:
       # True only on a manual dispatch with the run_visit input left on; always
       # false for push/PR (inputs is null there, so the expression short-circuits).
       RUN_VISIT: ${{github.event_name == 'workflow_dispatch' && inputs.run_visit}}
+      # ccache: the actions-*.cfg optionlists wrap CC/CXX with `ccache`, so the
+      # object cache is restored across runs (see the Restore ccache step). Keep
+      # the dir inside the workspace so actions/cache can reach it; compare by
+      # file content since the container's compiler mtimes are not stable.
+      CCACHE_DIR: ${{github.workspace}}/.ccache
+      CCACHE_MAXSIZE: "2G"
+      CCACHE_COMPILERCHECK: content
 
     # The type of runner that the job will run on
     runs-on: ubuntu-latest
@@ -56,8 +63,36 @@ jobs:
       - name: Download Cactus
         run: /bin/bash $GITHUB_WORKSPACE/scripts/download.sh
 
+      - name: Install ccache
+        # ccache is not baked into the carpetx container images, but the
+        # optionlists invoke CC/CXX through it, so it must be on PATH. Install
+        # is cheap and idempotent; -z zeroes the per-run counters so the stats
+        # step below reports this run's hit rate.
+        run: |
+          if ! command -v ccache >/dev/null 2>&1; then
+            apt-get update -qq \
+              && apt-get install -y -qq --no-install-recommends ccache \
+              || echo "::warning::could not install ccache; the build will fail if CC/CXX cannot find it"
+          fi
+          ccache --version
+          ccache -z
+
+      - name: Restore ccache
+        # Keyed per matrix cell (objects differ by compiler/precision/mode) and
+        # per commit; restore-keys falls back to the newest cache for this cell.
+        uses: actions/cache@v4
+        with:
+          path: ${{env.CCACHE_DIR}}
+          key: ccache-${{matrix.accelerator}}-${{matrix.real-precision}}-${{matrix.mode}}-${{github.sha}}
+          restore-keys: |
+            ccache-${{matrix.accelerator}}-${{matrix.real-precision}}-${{matrix.mode}}-
+
       - name: Build Cactus
         run: /bin/bash $GITHUB_WORKSPACE/scripts/build.sh
+
+      - name: Show ccache stats
+        if: ${{always()}}
+        run: ccache -s || true
 
       - name: Test Cactus
         # We cannot run on accelerators. Single precision output is not accurate enough. Debug builds run too slowly.
