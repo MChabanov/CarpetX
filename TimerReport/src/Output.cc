@@ -518,7 +518,12 @@ int CollectTimerInfo(const cGH *restrict cctkGH, timer_stats &timers) {
   if (myproc == 0)
     all_ntimers.resize(nprocs);
 #ifdef CCTK_MPI
-  MPI_Gather(&my_ntimers, 1, MPI_INT, &all_ntimers[0], 1, MPI_INT, 0,
+  // Note: The receive buffer is only allocated on the root process; on all
+  // other processes these vectors are empty. Use .data() (well-defined for
+  // empty vectors) rather than &vec[0] (out-of-bounds operator[], which
+  // aborts under _GLIBCXX_ASSERTIONS). MPI ignores the receive arguments on
+  // non-root processes.
+  MPI_Gather(&my_ntimers, 1, MPI_INT, all_ntimers.data(), 1, MPI_INT, 0,
              MPI_COMM_WORLD);
 #else
   assert(myproc == 0);
@@ -536,8 +541,8 @@ int CollectTimerInfo(const cGH *restrict cctkGH, timer_stats &timers) {
   for (int n = 0; n < my_ntimers; ++n) {
     const char *name = CCTK_TimerName(n);
     if (name) {
-      max_timername_length = std::max(max_timername_length,
-                                      int(strlen(name) + 1));
+      max_timername_length =
+          std::max(max_timername_length, int(strlen(name) + 1));
     }
   }
 #ifdef CCTK_MPI
@@ -551,14 +556,15 @@ int CollectTimerInfo(const cGH *restrict cctkGH, timer_stats &timers) {
 #endif
 
   // Determine local timer names and their values
-  vector<char> my_timernames(my_ntimers*max_timername_length);
+  vector<char> my_timernames(my_ntimers * max_timername_length);
   for (int n = 0; n < my_ntimers; ++n) {
     const char *name = CCTK_TimerName(n);
     if (name == nullptr)
-      snprintf(&my_timernames[n*max_timername_length], max_timername_length, "DESTROYED TIMER %5d",
-               n);
+      snprintf(&my_timernames[n * max_timername_length], max_timername_length,
+               "DESTROYED TIMER %5d", n);
     else
-      snprintf(&my_timernames[n*max_timername_length], max_timername_length, "%s", name);
+      snprintf(&my_timernames[n * max_timername_length], max_timername_length,
+               "%s", name);
   }
   vector<double> my_timervalues(my_ntimers);
   {
@@ -585,7 +591,7 @@ int CollectTimerInfo(const cGH *restrict cctkGH, timer_stats &timers) {
   vector<char> all_timernames;
   vector<double> all_timervalues;
   if (myproc == 0) {
-    all_timernames.resize(total_ntimers*max_timername_length);
+    all_timernames.resize(total_ntimers * max_timername_length);
     all_timervalues.resize(total_ntimers);
   }
   vector<int> name_displacements, value_displacements, name_counts;
@@ -604,12 +610,15 @@ int CollectTimerInfo(const cGH *restrict cctkGH, timer_stats &timers) {
     }
   }
 #ifdef CCTK_MPI
-  MPI_Gatherv(&my_timernames[0], my_ntimers * max_timername_length, MPI_CHAR,
-              &all_timernames[0], &name_counts[0], &name_displacements[0],
-              MPI_CHAR, 0, MPI_COMM_WORLD);
-  MPI_Gatherv(&my_timervalues[0], my_ntimers, MPI_DOUBLE, &all_timervalues[0],
-              &all_ntimers[0], &value_displacements[0], MPI_DOUBLE, 0,
-              MPI_COMM_WORLD);
+  // The receive buffers/counts/displacements are only allocated on the root
+  // process and are empty elsewhere; use .data() so the empty-vector case is
+  // well-defined (MPI ignores these arguments on non-root processes).
+  MPI_Gatherv(my_timernames.data(), my_ntimers * max_timername_length, MPI_CHAR,
+              all_timernames.data(), name_counts.data(),
+              name_displacements.data(), MPI_CHAR, 0, MPI_COMM_WORLD);
+  MPI_Gatherv(my_timervalues.data(), my_ntimers, MPI_DOUBLE,
+              all_timervalues.data(), all_ntimers.data(),
+              value_displacements.data(), MPI_DOUBLE, 0, MPI_COMM_WORLD);
 #else
   assert(all_timernames.size() == my_timernames.size());
   assert(all_timervalues.size() == my_timervalues.size());
@@ -628,16 +637,17 @@ int CollectTimerInfo(const cGH *restrict cctkGH, timer_stats &timers) {
   vector<int> sort_index(total_ntimers);
   for (int i = 0; i < total_ntimers; ++i)
     sort_index[i] = i;
-  sort(sort_index.begin(), sort_index.end(),
-       [&](int ia, int ib) {
-         return strcmp(&all_timernames[ia*max_timername_length],
-                       &all_timernames[ib*max_timername_length]) < 0;
+  sort(sort_index.begin(), sort_index.end(), [&](int ia, int ib) {
+    return strcmp(&all_timernames[ia * max_timername_length],
+                  &all_timernames[ib * max_timername_length]) < 0;
   });
   sort_index.erase(
-      unique(sort_index.begin(), sort_index.end(), [&](int ia, int ib) {
-        return strcmp(&all_timernames[ia*max_timername_length],
-                      &all_timernames[ib*max_timername_length]) == 0;
-      }), sort_index.end());
+      unique(sort_index.begin(), sort_index.end(),
+             [&](int ia, int ib) {
+               return strcmp(&all_timernames[ia * max_timername_length],
+                             &all_timernames[ib * max_timername_length]) == 0;
+             }),
+      sort_index.end());
   int unique_timers = sort_index.size();
 
   // Allocate timer data structure
@@ -647,7 +657,7 @@ int CollectTimerInfo(const cGH *restrict cctkGH, timer_stats &timers) {
   timers.secs_min.resize(timers.ntimers);
   timers.secs_max.resize(timers.ntimers);
   for (int n = 0; n < timers.ntimers; ++n) {
-    timers.names[n] = &all_timernames[sort_index[n]*max_timername_length];
+    timers.names[n] = &all_timernames[sort_index[n] * max_timername_length];
 
     // Reduce timer values
     CCTK_REAL count = 0.0;
@@ -660,7 +670,8 @@ int CollectTimerInfo(const cGH *restrict cctkGH, timer_stats &timers) {
       // Look for this timer
       // TODO: use a map
       for (int i = 0; i < all_ntimers[p]; ++i) {
-        if (timers.names[n] == &all_timernames[(name_offset + i)*max_timername_length]) {
+        if (timers.names[n] ==
+            &all_timernames[(name_offset + i) * max_timername_length]) {
           // Found the timer
           CCTK_REAL value = all_timervalues[value_displacements[p] + i];
           count += 1;
@@ -714,4 +725,4 @@ string QuoteForTSV(const string &str) {
   }
   return buf.str();
 }
-}
+} // namespace TimerReport
