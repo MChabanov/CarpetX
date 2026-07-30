@@ -14,6 +14,7 @@
 #include <div.hxx>
 
 #include <AMReX_MultiFab.H>
+#include <AMReX_Version.H>
 
 #if defined _OPENMP || defined __HIPCC__
 #include <omp.h>
