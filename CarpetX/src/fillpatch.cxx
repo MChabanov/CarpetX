@@ -118,9 +118,7 @@ void FillPatch_Prolongate(
   tasks2.submit_serially([&tasks3, &groupdata, &coarsegroupdata, &mfab, &cgeom,
                           &fgeom, mapper, &bcrecs, &fpc, mfab_crse_patch_ptr,
                           mfab_crse_patch_old_ptr, w_new, do_sync]() {
-    const IntVect &nghosts = mfab.nGrowVect();
     const int ncomps = mfab.nComp();
-    const IntVect ratio{2, 2, 2};
     MultiFab &mfab_crse_patch = *mfab_crse_patch_ptr;
 
     // Finish same-level sync (only when do_sync)
@@ -143,35 +141,65 @@ void FillPatch_Prolongate(
       delete mfab_crse_patch_old_ptr;
     }
 
-    coarsegroupdata.apply_boundary_conditions(mfab_crse_patch);
-
     MultiFab *const mfab_fine_patch_ptr =
         new MultiFab(make_mf_fine_patch<MultiFab>(fpc, ncomps));
     MultiFab &mfab_fine_patch = *mfab_fine_patch_ptr;
 
-    // Interpolate coarse buffer into fine buffer (in space, local)
-    FillPatchInterp(mfab_fine_patch, 0, mfab_crse_patch, 0, ncomps,
-                    IntVect{0} /* don't add any new ghosts */, cgeom, fgeom,
-                    grow(convert(fgeom.Domain(), mfab.ixType()), nghosts),
-                    ratio, mapper, bcrecs, 0);
-
-    // Copy fine buffer into destination
-    mfab.ParallelCopy_nowait(
-        mfab_fine_patch, 0, 0, ncomps,
-        IntVect{0} /* don't use any ghosts from the buffer */, nghosts);
+    // Coarse boundary conditions, interpolation into the fine buffer, and
+    // start of the copy into the destination
+    Prolongate_Start(groupdata, coarsegroupdata, mfab, mfab_crse_patch,
+                     mfab_fine_patch, fgeom, cgeom, mapper, bcrecs);
 
     delete mfab_crse_patch_ptr;
 
     tasks3.submit_serially([&groupdata, &mfab, mfab_fine_patch_ptr]() {
-      // Finish copying fine buffer into destination
-      mfab.ParallelCopy_finish();
-
-      // Apply symmetry and boundary conditions
-      groupdata.apply_boundary_conditions(mfab);
+      // Finish the copy into the destination, fine boundary conditions
+      Prolongate_Finish(groupdata, mfab);
 
       delete mfab_fine_patch_ptr;
     });
   });
+}
+
+void Prolongate_Start(
+    const GHExt::PatchData::LevelData::GroupData &groupdata,
+    const GHExt::PatchData::LevelData::GroupData &coarsegroupdata,
+    MultiFab &mfab, MultiFab &crse_patch, MultiFab &fine_patch,
+    const Geometry &fgeom, const Geometry &cgeom, Interpolater *const mapper,
+    const Vector<BCRec> &bcrecs) {
+  assert(!groupdata.mfab.empty());
+  assert(!coarsegroupdata.mfab.empty());
+  const IntVect &nghosts = mfab.nGrowVect();
+  const int ncomps = mfab.nComp();
+  const IntVect ratio{2, 2, 2};
+  assert(crse_patch.nComp() == ncomps);
+  assert(fine_patch.nComp() == ncomps);
+  // `FillPatchInterp` walks the fine buffer and indexes the coarse buffer box
+  // by box
+  assert(crse_patch.DistributionMap() == fine_patch.DistributionMap());
+  assert(crse_patch.size() == fine_patch.size());
+
+  coarsegroupdata.apply_boundary_conditions(crse_patch);
+
+  // Interpolate coarse buffer into fine buffer (in space, local)
+  FillPatchInterp(fine_patch, 0, crse_patch, 0, ncomps,
+                  IntVect{0} /* don't add any new ghosts */, cgeom, fgeom,
+                  grow(convert(fgeom.Domain(), mfab.ixType()), nghosts), ratio,
+                  mapper, bcrecs, 0);
+
+  // Copy fine buffer into destination
+  mfab.ParallelCopy_nowait(
+      fine_patch, 0, 0, ncomps,
+      IntVect{0} /* don't use any ghosts from the buffer */, nghosts);
+}
+
+void Prolongate_Finish(const GHExt::PatchData::LevelData::GroupData &groupdata,
+                       MultiFab &mfab) {
+  // Finish copying fine buffer into destination
+  mfab.ParallelCopy_finish();
+
+  // Apply symmetry and boundary conditions
+  groupdata.apply_boundary_conditions(mfab);
 }
 
 void FillPatch_NewLevel(
@@ -265,65 +293,6 @@ void FillPatch_RemakeLevel(
   mfab.ParallelCopy(fmfab, 0, 0, ncomps, IntVect{0} /* don't use old ghosts */,
                     nghosts, fgeom.periodicity());
   groupdata.apply_boundary_conditions(mfab);
-}
-
-// Band-to-band prolongation for the subcycling RK k-stages. This reuses the
-// same TheFPinfo + FillPatchInterp + apply_boundary_conditions primitives as
-// FillPatch_Prolongate / FillPatch_RemakeLevel, but reads its coarse source
-// from the coarse level's source band and writes the interpolated result into
-// the fine level's consumer band, instead of reading the full coarse mfab
-// interior and scattering into the fine mfab's ghost halo. It is synchronous
-// (modelled on FillPatch_RemakeLevel) because the destination is a small
-// pre-allocated band, so the coroutine/task overlap of FillPatch_Prolongate is
-// unnecessary. The time-blend (cmfab_old) path is intentionally absent.
-//
-// Preconditions (guaranteed by build_bands using the same fpc):
-//   - source_band covers fpc.ba_crse_patch (its cells are valid interior cells
-//     written by setks, so the ParallelCopy into the coarse patch is complete);
-//   - consumer_band is allocated over fpc.ba_fine_patch / fpc.dm_patch (==
-//     make_mf_fine_patch geometry), so FillPatchInterp stays local.
-void FillPatch_ProlongateToBand(
-    const GHExt::PatchData::LevelData::GroupData &groupdata,
-    const GHExt::PatchData::LevelData::GroupData &coarsegroupdata,
-    MultiFab &consumer_band, const MultiFab &source_band, const Geometry &fgeom,
-    const Geometry &cgeom, Interpolater *const mapper,
-    const Vector<BCRec> &bcrecs) {
-  assert(!groupdata.mfab.empty());
-  assert(!coarsegroupdata.mfab.empty());
-
-  const MultiFab &mfab = *groupdata.mfab.at(0);
-  const IntVect &nghosts = mfab.nGrowVect();
-  if (nghosts.max() == 0)
-    return;
-
-  const int ncomps = consumer_band.nComp();
-  const IntVect ratio{2, 2, 2};
-  const EB2::IndexSpace *const index_space = nullptr;
-
-  const InterpolaterBoxCoarsener &coarsener = mapper->BoxCoarsener(ratio);
-
-  const FabArrayBase::FPinfo &fpc = FabArrayBase::TheFPinfo(
-      mfab, mfab, nghosts, coarsener, fgeom, cgeom, index_space);
-
-  if (fpc.ba_crse_patch.empty())
-    // There is no coarser level for our boundaries, i.e. there is no
-    // prolongation.
-    return;
-
-  // Copy the coarse source band into the coarse patch buffer. ParallelCopy
-  // redistributes the source band's cells onto fpc.dm_patch.
-  MultiFab mfab_crse_patch = make_mf_crse_patch<MultiFab>(fpc, ncomps);
-  mf_set_domain_bndry(mfab_crse_patch, cgeom);
-  mfab_crse_patch.ParallelCopy(
-      source_band, 0, 0, ncomps, IntVect{0} /* don't use source-band ghosts */,
-      mfab_crse_patch.nGrowVect(), cgeom.periodicity());
-  coarsegroupdata.apply_boundary_conditions(mfab_crse_patch);
-
-  // Interpolate the coarse patch directly into the caller's consumer band.
-  FillPatchInterp(consumer_band, 0, mfab_crse_patch, 0, ncomps,
-                  IntVect{0} /* don't add any new ghosts */, cgeom, fgeom,
-                  grow(convert(fgeom.Domain(), mfab.ixType()), nghosts), ratio,
-                  mapper, bcrecs, 0);
 }
 
 } // namespace CarpetX
