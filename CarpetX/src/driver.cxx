@@ -1,7 +1,6 @@
 #include "driver.hxx"
 
 #include "boundaries.hxx"
-#include "cf_mask.hxx"
 #include "fillpatch.hxx"
 #include "interp.hxx"
 #include "io.hxx"
@@ -960,171 +959,6 @@ GHExt::PatchData::LevelData::GroupData::GroupData(
 
 ////////////////////////////////////////////////////////////////////////////////
 
-void GHExt::PatchData::LevelData::build_cf_mask(
-    const std::array<int, dim> &indextype,
-    const std::array<int, dim> &nghostzones) const {
-  // Nothing to mask at the coarsest level or outside subcycling runs.
-  if (level == 0 || !ghext->use_subcycling)
-    return;
-
-  const int s = (indextype[0] << 2) | (indextype[1] << 1) | indextype[2];
-  if (cf_masks[s])
-    return; // already built (idempotent: warm-up runs every step)
-
-  const amrex::IntVect ng(nghostzones[0], nghostzones[1], nghostzones[2]);
-  const amrex::BoxArray gba = amrex::convert(
-      fab->boxArray(),
-      amrex::IndexType(
-          indextype[0] ? amrex::IndexType::CELL : amrex::IndexType::NODE,
-          indextype[1] ? amrex::IndexType::CELL : amrex::IndexType::NODE,
-          indextype[2] ? amrex::IndexType::CELL : amrex::IndexType::NODE));
-
-  auto mask = std::make_unique<amrex::iMultiFab>(gba, fab->DistributionMap(),
-                                                 /*ncomp=*/1, ng);
-  const auto &geom = ghext->patchdata.at(patch).amrcore->Geom(level);
-  // covered=0  : ghosts filled by same-level FillBoundary (intra-/inter-
-  //              process and periodic-image — see getFB(ngrow, period)
-  //              overlay in AMReX_FabArray.H).
-  // notcovered : coarse-fine prolongation ghosts. Set to cf_ghost (truthy).
-  // physbnd=0  : physical-outer boundary ghosts.
-  // interior=0 : not read by the consumer (loop_device_idx<ghosts>).
-  mask->BuildMask(geom.Domain(), geom.periodicity(),
-                  /*covered=*/0,
-                  /*notcovered=*/cf_ghost,
-                  /*physbnd=*/0,
-                  /*interior=*/0);
-  cf_masks[s] = std::move(mask);
-}
-
-amrex::iMultiFab *GHExt::PatchData::LevelData::get_cf_mask(
-    const std::array<int, dim> &indextype,
-    const std::array<int, dim> &nghostzones) const {
-  // Pure reader: no MFIter, no cache store, so concurrent reads are safe.
-  // The slot must have been warmed single-threaded via build_cf_mask; an
-  // un-warmed centering is a missing warm-up and trips the assert below.
-  if (level == 0 || !ghext->use_subcycling)
-    return nullptr;
-
-  const int s = (indextype[0] << 2) | (indextype[1] << 1) | indextype[2];
-  const amrex::IntVect ng(nghostzones[0], nghostzones[1], nghostzones[2]);
-  // Slot must be warm (build_cf_mask ran single-threaded). Sharing assumption:
-  // all groups of this centering at this level use the same nghostzones; if the
-  // nGrowVect check trips, widen the cache key from `centering` to
-  // `(centering, nghost)` inside build_cf_mask.
-  assert(cf_masks[s] && cf_masks[s]->nGrowVect() == ng);
-  return cf_masks[s].get();
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-void GHExt::PatchData::LevelData::build_bands(
-    const GroupData &groupdata) const {
-  // Bands only exist for evolved groups under subcycling.
-  if (!ghext->use_subcycling || !groupdata.do_evolve)
-    return;
-
-  const std::array<int, dim> &indextype = groupdata.indextype;
-  // Sharing assumption (as for cf_masks): all groups of this centering at this
-  // level use the same nghostzones and interpolator, so the band geometry can
-  // be cached per (level, centering).
-  const int s = (indextype[0] << 2) | (indextype[1] << 1) | indextype[2];
-
-  const auto &patchdata = ghext->patchdata.at(patch);
-  const amrex::IntVect ratio{2, 2, 2};
-  const amrex::InterpolaterBoxCoarsener &coarsener =
-      groupdata.interpolator->BoxCoarsener(ratio);
-  const amrex::EB2::IndexSpace *const index_space = nullptr;
-
-  // Current child (level+1) layout the source band must match; empty on the
-  // finest level.
-  amrex::BoxArray current_child_ba;
-  if (level + 1 < int(patchdata.leveldata.size())) {
-    const auto &childleveldata = patchdata.leveldata.at(level + 1);
-    const auto &childgroupdata =
-        *childleveldata.groupdata.at(groupdata.groupindex);
-    current_child_ba = childgroupdata.mfab.at(0)->boxArray();
-  }
-
-  // ---- Band geometry, built once per (level, centering), and rebuilt when
-  // the child layout changes (operator== short-circuits on the shared m_ref,
-  // so this is O(1) on unchanged grids). ----
-  // A non-null source_band_ba[s] marks the geometry as built; the consumer and
-  // source slots are filled together, each possibly holding an empty BoxArray
-  // (level 0 has no consumer band, the finest level has no source band). This
-  // must run after all levels exist so the source band can see its children.
-  if (!source_band_ba[s] || !source_band_child_ba[s] ||
-      *source_band_child_ba[s] != current_child_ba) {
-    // Consumer band == this level's cf-ghost region (fpc.ba_fine_patch w.r.t.
-    // the parent). Empty at level 0.
-    amrex::BoxArray fba;
-    amrex::DistributionMapping fdm;
-    if (level > 0) {
-      const auto &mfab = *groupdata.mfab.at(0);
-      const amrex::IntVect &nghosts = mfab.nGrowVect();
-      const auto &fgeom = patchdata.amrcore->Geom(level);
-      const auto &cgeom = patchdata.amrcore->Geom(level - 1);
-      const amrex::FabArrayBase::FPinfo &fpc = amrex::FabArrayBase::TheFPinfo(
-          mfab, mfab, nghosts, coarsener, fgeom, cgeom, index_space);
-      fba = fpc.ba_fine_patch;
-      fdm = fpc.dm_patch;
-    }
-    consumer_band_ba[s] = std::make_unique<amrex::BoxArray>(fba);
-    consumer_band_dm[s] = std::make_unique<amrex::DistributionMapping>(fdm);
-
-    // Source band == coarse cells under the next-finer level's cf-ghost
-    // footprint (child fpc.ba_crse_patch). Empty when this is the finest level.
-    amrex::BoxArray cba;
-    amrex::DistributionMapping cdm;
-    if (level + 1 < int(patchdata.leveldata.size())) {
-      const auto &childleveldata = patchdata.leveldata.at(level + 1);
-      const auto &childgroupdata =
-          *childleveldata.groupdata.at(groupdata.groupindex);
-      const auto &childmfab = *childgroupdata.mfab.at(0);
-      const amrex::IntVect &childnghosts = childmfab.nGrowVect();
-      const auto &fgeom = patchdata.amrcore->Geom(level + 1);
-      const auto &cgeom = patchdata.amrcore->Geom(level);
-      const amrex::FabArrayBase::FPinfo &fpc =
-          amrex::FabArrayBase::TheFPinfo(childmfab, childmfab, childnghosts,
-                                         coarsener, fgeom, cgeom, index_space);
-      cba = fpc.ba_crse_patch;
-      cdm = fpc.dm_patch;
-    }
-    source_band_ba[s] = std::make_unique<amrex::BoxArray>(cba);
-    source_band_dm[s] = std::make_unique<amrex::DistributionMapping>(cdm);
-    source_band_child_ba[s] =
-        std::make_unique<amrex::BoxArray>(current_child_ba);
-  }
-
-  // ---- Per-group band MultiFab allocation (idempotent, zero ghost) ----
-  const int numvars = groupdata.numvars;
-  for (int stage = 0; stage < ghext->num_rk_stages; ++stage) {
-    if (!groupdata.ks_consumer_band[stage] && !consumer_band_ba[s]->empty())
-      groupdata.ks_consumer_band[stage] = std::make_unique<amrex::MultiFab>(
-          *consumer_band_ba[s], *consumer_band_dm[s], numvars, 0);
-    // Drop a source band whose layout no longer matches the (rebuilt or
-    // emptied) geometry, then (re)allocate below.
-    if (groupdata.ks_source_band[stage] &&
-        groupdata.ks_source_band[stage]->boxArray() != *source_band_ba[s])
-      groupdata.ks_source_band[stage].reset();
-    if (!groupdata.ks_source_band[stage] && !source_band_ba[s]->empty())
-      groupdata.ks_source_band[stage] = std::make_unique<amrex::MultiFab>(
-          *source_band_ba[s], *source_band_dm[s], numvars, 0);
-  }
-
-  // Old-state bands (single snapshot, share the ks band geometry above).
-  if (!groupdata.old_consumer_band && !consumer_band_ba[s]->empty())
-    groupdata.old_consumer_band = std::make_unique<amrex::MultiFab>(
-        *consumer_band_ba[s], *consumer_band_dm[s], numvars, 0);
-  if (groupdata.old_source_band &&
-      groupdata.old_source_band->boxArray() != *source_band_ba[s])
-    groupdata.old_source_band.reset();
-  if (!groupdata.old_source_band && !source_band_ba[s]->empty())
-    groupdata.old_source_band = std::make_unique<amrex::MultiFab>(
-        *source_band_ba[s], *source_band_dm[s], numvars, 0);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
 bool all_levels_synchronized() {
   if (!ghext->use_subcycling)
     return true;
@@ -1139,20 +973,67 @@ bool all_levels_synchronized() {
   return true;
 }
 
+bool recovered_level_needs_rk_bands(const int patch, const int level) {
+  if (!ghext->use_subcycling)
+    return false;
+  const auto &iterations = ghext->recovered_level_iterations;
+  if (patch < 0 || patch >= int(iterations.size()))
+    return false;
+  const auto &level_iterations = iterations.at(patch);
+  const int child = level + 1;
+  if (level < 0 || child >= int(level_iterations.size()))
+    return false; // finest level: no children to fill
+  const std::optional<rat64> &self = level_iterations.at(level);
+  const std::optional<rat64> &child_iteration = level_iterations.at(child);
+  if (!self || !child_iteration)
+    return false; // old checkpoint without per-level iteration: time-aligned
+  // Under 2:1 time refinement the child is either aligned with this level or
+  // half a coarse step behind it; only in the latter case does the child's
+  // next substep read this level's in-progress step from the bands.
+  return *child_iteration < *self;
+}
+
 std::string subcycling_band_tag(const band_kind kind, const int stage) {
   std::ostringstream buf;
   switch (kind) {
-  case band_kind::ks_consumer:
+  case band_kind::ks_source:
     assert(stage >= 0 && stage < max_num_rk_stages);
-    buf << "ksc_s" << std::setw(2) << std::setfill('0') << stage;
+    buf << "kss_s" << std::setw(2) << std::setfill('0') << stage;
     break;
-  case band_kind::old_consumer:
-    buf << "oldc";
+  case band_kind::old_source:
+    buf << "olds";
     break;
   default:
     assert(0);
   }
   return buf.str();
+}
+
+amrex::MultiFab *rk_source_band(const int patch, const int level, const int gi,
+                                const band_kind kind, const int stage) {
+  // The one place that decides which GroupData holds the band that level
+  // `level` fills as a parent: it is owned by the child level's GroupData,
+  // next to the child's rk_crse_patch / rk_fine_patch. The IO backends iterate
+  // the parent level (the bands sit in its index space and are serialized
+  // under its name) and reach the band through here.
+  const auto &patchdata = ghext->patchdata.at(patch);
+  assert(level >= 0);
+  if (level + 1 >= int(patchdata.leveldata.size()))
+    return nullptr; // finest level: no children to fill
+  const auto &childleveldata = patchdata.leveldata.at(level + 1);
+  const auto *const groupdata = childleveldata.groupdata.at(gi).get();
+  if (!groupdata)
+    return nullptr;
+  switch (kind) {
+  case band_kind::ks_source:
+    assert(stage >= 0 && stage < max_num_rk_stages);
+    return groupdata->ks_source_band[stage].get();
+  case band_kind::old_source:
+    return groupdata->old_source_band.get();
+  default:
+    assert(0);
+  }
+  return nullptr;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1495,6 +1376,18 @@ void CactusAmrCore::MakeNewLevelFromScratch(
     CCTK_VINFO("MakeNewLevelFromScratch patch %d level %d done.", patch, level);
 }
 
+// How many time levels are transported onto a new/remade level at regrid time
+static int
+regrid_prolongate_tls(const GHExt::PatchData::LevelData::GroupData &groupdata) {
+  const int ntls = groupdata.mfab.size();
+  // Evolved state: all but the oldest time level (ntls == 1: that one),
+  // since CycleTimelevels invalidates the oldest anyway.
+  return groupdata.do_evolve ? (ntls > 1 ? ntls - 1 : ntls)
+         : groupdata.do_checkpoint
+             ? ntls // persistent non-evolved state: all TLs
+             : 0;   // recomputable scratch: nothing
+}
+
 void CactusAmrCore::MakeNewLevelFromCoarse(
     const int level, const amrex::Real time, const amrex::BoxArray &ba,
     const amrex::DistributionMapping &dm) {
@@ -1542,10 +1435,7 @@ void CactusAmrCore::MakeNewLevelFromCoarse(
     amrex::Interpolater *const interpolator = groupdata.interpolator;
 
     const int ntls = groupdata.mfab.size();
-    // We only prolongate the state vector. And if there is more than
-    // one time level, then we don't prolongate the oldest.
-    const int prolongate_tl =
-        groupdata.do_evolve ? (ntls > 1 ? ntls - 1 : ntls) : 0;
+    const int prolongate_tl = regrid_prolongate_tls(groupdata);
     const nan_handling_t nan_handling = groupdata.do_evolve
                                             ? nan_handling_t::forbid_nans
                                             : nan_handling_t::allow_nans;
@@ -1554,39 +1444,65 @@ void CactusAmrCore::MakeNewLevelFromCoarse(
     for (int tl = 0; tl < ntls; ++tl) {
       why_valid_t why([]() { return "MakeNewLevelFromCoarse"; });
       groupdata.valid.at(tl).resize(groupdata.numvars, why);
-      for (int vi = 0; vi < groupdata.numvars; ++vi)
-        groupdata.valid.at(tl).at(vi).set_all(valid_t(false), []() {
-          return "MakeNewLevelFromCoarse: not prolongated because variable is "
-                 "not evolved";
-        });
+      for (int vi = 0; vi < groupdata.numvars; ++vi) {
+        // Time levels with tl < prolongate_tl are overwritten below after
+        // prolongation; these reasons persist only for the others
+        if (groupdata.do_evolve)
+          groupdata.valid.at(tl).at(vi).set_all(valid_t(false), []() {
+            return "MakeNewLevelFromCoarse: oldest time level is not "
+                   "prolongated at regrid";
+          });
+        else
+          groupdata.valid.at(tl).at(vi).set_all(valid_t(false), []() {
+            return "MakeNewLevelFromCoarse: not prolongated because variable "
+                   "is not evolved";
+          });
+      }
 
       if (tl < prolongate_tl) {
-        // Expect coarse grid data to be valid
-        for (int vi = 0; vi < groupdata.numvars; ++vi) {
-          error_if_invalid(coarsegroupdata, vi, tl, make_valid_all(), []() {
-            return "MakeNewLevelFromCoarse before prolongation";
-          });
-          check_valid_gf(active_coarse_levels, gi, vi, tl, nan_handling, []() {
-            return "MakeNewLevelFromCoarse before prolongation";
-          });
+        bool do_fill = true;
+        if (groupdata.do_evolve) {
+          // Expect coarse grid data to be valid
+          for (int vi = 0; vi < groupdata.numvars; ++vi)
+            error_if_invalid(coarsegroupdata, vi, tl, make_valid_all(), []() {
+              return "MakeNewLevelFromCoarse before prolongation";
+            });
+        } else {
+          // Checkpointed non-evolved state: transport best-effort, only
+          // when the coarse source is fully valid
+          for (int vi = 0; vi < groupdata.numvars; ++vi)
+            do_fill &= coarsegroupdata.valid.at(tl).at(vi).get().valid_all();
         }
-        FillPatch_NewLevel(
-            groupdata, coarsegroupdata, *groupdata.mfab.at(tl),
-            *coarsegroupdata.mfab.at(tl), patchdata.amrcore->Geom(level - 1),
-            patchdata.amrcore->Geom(level), interpolator, groupdata.bcrecs);
-        const auto outer_valid =
-            groupdata.all_faces_have_symmetries_or_boundaries()
-                ? make_valid_outer()
-                : valid_t();
-        for (int vi = 0; vi < groupdata.numvars; ++vi) {
-          groupdata.valid.at(tl).at(vi).set_all(
-              make_valid_int() | make_valid_ghosts() | outer_valid,
-              []() { return "MakeNewLevelFromCoarse after prolongation"; });
-          // This cannot be called because it would access the data
-          // with old metadata
-          // check_valid_gf(active_levels, gi, vi, tl, nan_handling, []() {
-          //   return "MakeNewLevelFromCoarse after prolongation";
-          // });
+        if (do_fill) {
+          for (int vi = 0; vi < groupdata.numvars; ++vi)
+            check_valid_gf(
+                active_coarse_levels, gi, vi, tl, nan_handling,
+                []() { return "MakeNewLevelFromCoarse before prolongation"; });
+          FillPatch_NewLevel(
+              groupdata, coarsegroupdata, *groupdata.mfab.at(tl),
+              *coarsegroupdata.mfab.at(tl), patchdata.amrcore->Geom(level - 1),
+              patchdata.amrcore->Geom(level), interpolator, groupdata.bcrecs);
+          const auto outer_valid =
+              groupdata.all_faces_have_symmetries_or_boundaries()
+                  ? make_valid_outer()
+                  : valid_t();
+          for (int vi = 0; vi < groupdata.numvars; ++vi) {
+            groupdata.valid.at(tl).at(vi).set_all(
+                make_valid_int() | make_valid_ghosts() | outer_valid,
+                []() { return "MakeNewLevelFromCoarse after prolongation"; });
+            // This cannot be called because it would access the data
+            // with old metadata
+            // check_valid_gf(active_levels, gi, vi, tl, nan_handling, []() {
+            //   return "MakeNewLevelFromCoarse after prolongation";
+            // });
+          }
+        } else {
+          // Data already poisoned by SetupLevel
+          for (int vi = 0; vi < groupdata.numvars; ++vi)
+            groupdata.valid.at(tl).at(vi).set_all(valid_t(false), []() {
+              return "MakeNewLevelFromCoarse: not prolongated because source "
+                     "was invalid at regrid time";
+            });
         }
       }
 
@@ -1647,10 +1563,7 @@ void CactusAmrCore::RemakeLevel(const int level, const amrex::Real time,
     assert(coarsegroupdata.numvars == groupdata.numvars);
 
     const int ntls = groupdata.mfab.size();
-    // We only prolongate the state vector. And if there is more than
-    // one time level, then we don't prolongate the oldest.
-    const int prolongate_tl =
-        groupdata.do_evolve ? (ntls > 1 ? ntls - 1 : ntls) : 0;
+    const int prolongate_tl = regrid_prolongate_tls(groupdata);
     const nan_handling_t nan_handling = groupdata.do_evolve
                                             ? nan_handling_t::forbid_nans
                                             : nan_handling_t::allow_nans;
@@ -1659,7 +1572,9 @@ void CactusAmrCore::RemakeLevel(const int level, const amrex::Real time,
       for (int vi = 0; vi < groupdata.numvars; ++vi) {
         poison_invalid_gf(active_levels, gi, vi, tl);
 
-        if (tl < prolongate_tl) {
+        // Checkpointed non-evolved groups are transported best-effort;
+        // only evolved groups require valid sources here
+        if (groupdata.do_evolve && tl < prolongate_tl) {
           error_if_invalid(coarsegroupdata, vi, tl, make_valid_all(),
                            []() { return "RemakeLevel before prolongation"; });
           error_if_invalid(groupdata, vi, tl, make_valid_all(),
@@ -1716,24 +1631,40 @@ void CactusAmrCore::RemakeLevel(const int level, const amrex::Real time,
                                             : nan_handling_t::allow_nans;
 
     const int ntls = groupdata.mfab.size();
-    // We only prolongate the state vector. And if there is more than
-    // one time level, then we don't prolongate the oldest.
-    const int prolongate_tl =
-        groupdata.do_evolve ? (ntls > 1 ? ntls - 1 : ntls) : 0;
+    const int prolongate_tl = regrid_prolongate_tls(groupdata);
 
     for (int tl = 0; tl < ntls; ++tl) {
       if (tl < prolongate_tl) {
-        // Copy from same level and/or prolongate from next coarser level
-        FillPatch_RemakeLevel(
-            groupdata, coarsegroupdata, *groupdata.mfab.at(tl),
-            *coarsegroupdata.mfab.at(tl), *oldgroupdata.mfab.at(tl),
-            patchdata.amrcore->Geom(level - 1), patchdata.amrcore->Geom(level),
-            interpolator, groupdata.bcrecs);
+        // Checkpointed non-evolved state: transport best-effort, only when
+        // both the coarse and the old fine sources are fully valid
+        // (oldgroupdata.valid still carries the pre-swap flags)
+        bool do_fill = true;
+        if (!groupdata.do_evolve)
+          for (int vi = 0; vi < groupdata.numvars; ++vi)
+            do_fill &= coarsegroupdata.valid.at(tl).at(vi).get().valid_all() &&
+                       oldgroupdata.valid.at(tl).at(vi).get().valid_all();
 
-        for (int vi = 0; vi < groupdata.numvars; ++vi)
-          groupdata.valid.at(tl).at(vi) =
-              why_valid_t(make_valid_int() | make_valid_ghosts() | outer_valid,
-                          []() { return "RemakeLevel after prolongation"; });
+        if (do_fill) {
+          // Copy from same level and/or prolongate from next coarser level
+          FillPatch_RemakeLevel(
+              groupdata, coarsegroupdata, *groupdata.mfab.at(tl),
+              *coarsegroupdata.mfab.at(tl), *oldgroupdata.mfab.at(tl),
+              patchdata.amrcore->Geom(level - 1),
+              patchdata.amrcore->Geom(level), interpolator, groupdata.bcrecs);
+
+          for (int vi = 0; vi < groupdata.numvars; ++vi)
+            groupdata.valid.at(tl).at(vi) = why_valid_t(
+                make_valid_int() | make_valid_ghosts() | outer_valid,
+                []() { return "RemakeLevel after prolongation"; });
+        } else {
+          // Leave the constructor-default invalid state; the data is
+          // poisoned below
+          for (int vi = 0; vi < groupdata.numvars; ++vi)
+            groupdata.valid.at(tl).at(vi).set_all(valid_t(false), []() {
+              return "RemakeLevel: not prolongated because source was "
+                     "invalid at regrid time";
+            });
+        }
       }
 
       for (int vi = 0; vi < groupdata.numvars; ++vi) {

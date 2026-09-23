@@ -684,7 +684,6 @@ void CarpetX::InterpolationSetup::Interpolate(
 
   rat64 min_level_iteration_used = -1;
   rat64 max_level_iteration_used = -1;
-  bool requires_interpolation_in_time = false;
   for (const auto &patchdata : ghext->patchdata) {
     const int patch = patchdata.patch;
     for (const auto &leveldata : patchdata.leveldata) {
@@ -882,12 +881,19 @@ void CarpetX::InterpolationSetup::Interpolate(
                   MPI_MAX, comm);
     const double min_iteration_used = -global_iteration_used[0];
     const double max_iteration_used = +global_iteration_used[1];
-    // Did two (or one) ranks use different iterations?
-    if (max_iteration_used != min_iteration_used) {
+    // If no rank interpolated any point (e.g. a collective call with zero
+    // points everywhere), both reductions saw only the -inf sentinel and
+    // min > max: nothing was interpolated, so no time alignment is required.
+    if (min_iteration_used <= max_iteration_used &&
+        min_iteration_used != max_iteration_used) {
       CCTK_VERROR("Interpolation in time required when interpolating %s at "
-                  "iteration %d",
+                  "iteration %d: points used refinement levels at subcycling "
+                  "iterations %g through %g. Schedule interpolation only when "
+                  "all levels are time-aligned (e.g. every "
+                  "2^(max_num_levels-1) iterations).",
                   nvars > 0 ? CCTK_FullVarName(varinds[0]) : "no variable",
-                  cctkGH->cctk_iteration);
+                  cctkGH->cctk_iteration, min_iteration_used,
+                  max_iteration_used);
     }
   }
 
