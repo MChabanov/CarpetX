@@ -763,6 +763,30 @@ to shape the registry around.
 
 ## 6. Staged plan
 
+### 6.-1 Status
+
+| step | state |
+|---|---|
+| 0 kernels + tests | **done** |
+| 1 group-triple discovery | **done** |
+| 2 `FillPatch_NewLevel` (regrid from coarse) | **done** |
+| 3 refined patch, pre-fill, masks; the ghost paths | **done** |
+| 4 `FillPatch_RemakeLevel` | **done** |
+| 5 subcycling | **not done** -- the path now fails loudly rather than degrading silently; see below and §8.8 |
+| 6 companions | $\Phi$ guidance below; the high-order Stage-1 split is not implemented |
+
+Step 5 is deliberately not attempted.  It needs the time-blended coarse patch,
+and a blended coarse edge is not the restriction of either fine state, so flux
+conservation across the refinement boundary would degrade by the
+time-interpolation error (§8.8).  That is a physics decision, not a plumbing
+one, and it should be made against a measurement rather than guessed.  Until
+then a vector-potential group prolonged from a time-misaligned coarse level
+raises an error naming the limitation.
+
+The high-order Stage-1 split (Eq. 32) is likewise not implemented: the draft
+requires it to be added together with compensating terms in the face and cell
+formulas, and those have not been derived or verified here.
+
 ### 6.0 Ordering principle
 
 Ordered by **plumbing complexity and testability**, not by math coverage: §2.7

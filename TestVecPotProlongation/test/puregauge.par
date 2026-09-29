@@ -1,0 +1,58 @@
+# Pure gauge vector potential on a two-level hierarchy.
+#
+# The initial data is the exact discrete gradient of a smooth scalar, so B is
+# zero to machine precision on the coarse level.  The refinement boundary is
+# the point of the test: the prolongation must leave B zero in the fine level's
+# ghost zones.  A prolongation that merely interpolates A_i would not.
+#
+# Pass criterion: max |Bvec_x|, |Bvec_y|, |Bvec_z| stay at round-off.
+
+ActiveThorns = "
+  CarpetX
+  CarpetXRegrid
+  IOUtil
+  TestVecPotProlongation
+"
+
+Cactus::cctk_show_schedule = yes
+Cactus::terminate          = "iteration"
+Cactus::cctk_itlast        = 0
+
+CarpetX::verbose = no
+
+CarpetX::xmin = -1.0
+CarpetX::ymin = -1.0
+CarpetX::zmin = -1.0
+CarpetX::xmax = +1.0
+CarpetX::ymax = +1.0
+CarpetX::zmax = +1.0
+
+CarpetX::ncells_x = 16
+CarpetX::ncells_y = 16
+CarpetX::ncells_z = 16
+
+CarpetX::periodic_x = yes
+CarpetX::periodic_y = yes
+CarpetX::periodic_z = yes
+
+CarpetX::ghost_size = 3
+
+CarpetX::max_num_levels     = 2
+CarpetX::regrid_every       = 0
+CarpetXRegrid::regrid_method = "box in box"
+CarpetXRegrid::box_radius_x  = 0.5
+CarpetXRegrid::box_radius_y  = 0.5
+CarpetXRegrid::box_radius_z  = 0.5
+
+CarpetX::prolongation_type  = "ddf"
+CarpetX::prolongation_order = 1
+
+TestVecPotProlongation::initial_condition = "pure gauge"
+TestVecPotProlongation::amplitude = 1.0
+TestVecPotProlongation::kx = 3.0
+TestVecPotProlongation::ky = 2.0
+TestVecPotProlongation::kz = 5.0
+
+IO::out_dir = $parfile
+IO::out_every = 1
+CarpetX::out_norm_vars = "TestVecPotProlongation::Bvec_x TestVecPotProlongation::Bvec_y TestVecPotProlongation::Bvec_z TestVecPotProlongation::divB"

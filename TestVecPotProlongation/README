@@ -1,0 +1,21 @@
+Integration test for prolongation_type="vecpot", the flux-preserving
+prolongation of an edge-staggered vector potential.  See PROLONG_A.md at the
+top of the repository for the construction and its verification status.
+
+The headline check is "pure gauge": initial data is the exact discrete gradient
+of a smooth scalar, so B vanishes to machine precision on the coarse level.
+The refinement boundary is what is being tested -- the prolongation must leave
+B zero in the fine level's ghost zones.  Interpolating A_i with a generic
+stencil would not; producing no magnetic field from a pure gauge field is the
+property that distinguishes this operator.
+
+  test/puregauge.par     max |Bvec_*| must stay at round-off
+
+The "smooth" initial condition has a nonzero B and is there for convergence and
+for flux conservation across the refinement boundary.
+
+divB is identically zero for any edge-staggered A, prolonged or not, so it
+checks this thorn's own bookkeeping rather than the operator.
+
+The same properties are checked without a toolkit build, in more detail, by
+CarpetX/test/unit/; run ./CarpetX/test/unit/run.sh.

@@ -1,0 +1,27 @@
+# Parameter definitions for thorn TestVecPotProlongation
+
+KEYWORD initial_condition "Initial data for the vector potential"
+{
+  "pure gauge" :: "A = grad lambda, so that B is exactly zero everywhere. The prolongation must keep it zero: this is the property that distinguishes the operator from generic interpolation of A_i"
+  "smooth"     :: "a smooth analytic A with a nonzero B, for convergence and flux conservation"
+} "pure gauge"
+
+CCTK_REAL amplitude "Amplitude of the initial data"
+{
+  *:* :: ""
+} 1.0
+
+CCTK_REAL kx "Wave number in the x direction"
+{
+  *:* :: ""
+} 1.0
+
+CCTK_REAL ky "Wave number in the y direction"
+{
+  *:* :: ""
+} 1.0
+
+CCTK_REAL kz "Wave number in the z direction"
+{
+  *:* :: ""
+} 1.0

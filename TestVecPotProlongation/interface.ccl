@@ -1,0 +1,23 @@
+# Interface definition for thorn TestVecPotProlongation
+
+IMPLEMENTS: TestVecPotProlongation
+
+INHERITS: CarpetXRegrid
+
+USES INCLUDE HEADER: loop_device.hxx
+
+PRIVATE:
+
+# The vector potential, staggered on cell edges.  The vector_potential tag
+# declares the triple; every member names all three, in x, y, z order.
+CCTK_REAL Avec_x TYPE=gf CENTERING={cvv} TAGS='parities={-1 +1 +1} prolongation_type="vecpot" vector_potential="Avec_x Avec_y Avec_z"' "x component of the vector potential"
+CCTK_REAL Avec_y TYPE=gf CENTERING={vcv} TAGS='parities={+1 -1 +1} prolongation_type="vecpot" vector_potential="Avec_x Avec_y Avec_z"' "y component of the vector potential"
+CCTK_REAL Avec_z TYPE=gf CENTERING={vvc} TAGS='parities={+1 +1 -1} prolongation_type="vecpot" vector_potential="Avec_x Avec_y Avec_z"' "z component of the vector potential"
+
+# The magnetic field, on cell faces: the discrete curl of Avec.  Diagnostic
+# only; it is never prolonged, always recomputed.
+CCTK_REAL Bvec_x TYPE=gf CENTERING={vcc} TAGS='parities={+1 -1 -1} checkpoint="no"' "x component of B = curl A"
+CCTK_REAL Bvec_y TYPE=gf CENTERING={cvc} TAGS='parities={-1 +1 -1} checkpoint="no"' "y component of B = curl A"
+CCTK_REAL Bvec_z TYPE=gf CENTERING={ccv} TAGS='parities={-1 -1 +1} checkpoint="no"' "z component of B = curl A"
+
+CCTK_REAL divB TYPE=gf CENTERING={ccc} TAGS='checkpoint="no"' "Discrete divergence of B; identically zero"

@@ -1,0 +1,26 @@
+# Schedule definitions for thorn TestVecPotProlongation
+
+STORAGE: Avec_x Avec_y Avec_z
+STORAGE: Bvec_x Bvec_y Bvec_z
+STORAGE: divB
+
+SCHEDULE TestVecPotProlongation_Initial AT initial
+{
+  LANG: C
+  WRITES: Avec_x(interior) Avec_y(interior) Avec_z(interior)
+  SYNC: Avec_x Avec_y Avec_z
+} "Set up the vector potential"
+
+SCHEDULE TestVecPotProlongation_Curl AT postinitial
+{
+  LANG: C
+  READS: Avec_x(everywhere) Avec_y(everywhere) Avec_z(everywhere)
+  WRITES: Bvec_x(interior) Bvec_y(interior) Bvec_z(interior)
+} "B = curl A, from the prolonged vector potential"
+
+SCHEDULE TestVecPotProlongation_Div AT postinitial AFTER TestVecPotProlongation_Curl
+{
+  LANG: C
+  READS: Bvec_x(everywhere) Bvec_y(everywhere) Bvec_z(everywhere)
+  WRITES: divB(interior)
+} "div B, which is identically zero for any edge-staggered A"
