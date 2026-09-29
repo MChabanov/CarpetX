@@ -6,3 +6,8 @@ tags
 
 # Riptide artifacts (cloud-synced)
 .humanlayer/tasks/
+
+# Standalone unit-test binaries (CarpetX/test/unit)
+CarpetX/test/unit/test_vecpot_kernels
+CarpetX/test/unit/test_vecpot_interp
+CarpetX/test/unit/test_vecpot_selftest
