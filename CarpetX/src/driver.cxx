@@ -7,6 +7,7 @@
 #include "logo.hxx"
 #include "loop_device.hxx"
 #include "prolongate_3d_rf2.hxx"
+#include "prolongate_3d_rf2_vecpot.hxx"
 #include "schedule.hxx"
 #include "subcycling.hxx"
 #include "timer.hxx"
@@ -31,6 +32,7 @@
 #include <cstring>
 #include <iomanip>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <ostream>
 #include <sstream>
@@ -695,6 +697,23 @@ amrex::Interpolater *get_interpolator(const std::string prolongation_type,
     operators = &prolongate_poly_cons3lfb_3d_rf2;
   else if (prolongation_type == "poly-eno3lfb")
     operators = &prolongate_poly_eno3lfb_3d_rf2;
+  else if (prolongation_type == "vecpot") {
+    // Not a per-index-type table: the operator couples the three components
+    // and is dispatched once per triple.  See PROLONG_A.md.
+    const bool is_edge = (indextype[0] + indextype[1] + indextype[2]) == 1;
+    if (!is_edge)
+      CCTK_VERROR("prolongation_type=\"vecpot\" requires an edge centering "
+                  "({cvv}, {vcv} or {vvc}), but this group is {%c%c%c}",
+                  indextype[0] ? 'c' : 'v', indextype[1] ? 'c' : 'v',
+                  indextype[2] ? 'c' : 'v');
+    // Run the self-test once, the first time the operator is requested, so
+    // that a broken build fails immediately rather than silently producing a
+    // wrong prolongation.  The same checks run without Cactus in
+    // CarpetX/test/unit/.
+    static std::once_flag vecpot_tested;
+    std::call_once(vecpot_tested, test_prolongate_3d_rf2_vecpot);
+    return &prolongate_vecpot_3d_rf2;
+  }
   else
     CCTK_VERROR("Unsupported prolongation type %s", prolongation_type.c_str());
 
@@ -942,6 +961,12 @@ GHExt::PatchData::LevelData::GroupData::GroupData(
   do_restrict = get_group_restrict_flag(gi);
   indextype = get_group_indextype(gi);
   nghostzones = get_group_nghostzones(gi);
+
+  vecpot_groups = get_group_vector_potential(gi);
+  vecpot_direction = -1;
+  for (int d = 0; d < dim; ++d)
+    if (vecpot_groups[d] == gi)
+      vecpot_direction = d;
 
   interpolator = get_interpolator(*this); // reads groupindex, indextype
 

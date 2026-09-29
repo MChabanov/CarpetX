@@ -53,6 +53,7 @@ SRCS =							\
 	prolongate_3d_rf2_impl_poly_cons3lfb.cxx	\
 	prolongate_3d_rf2_impl_poly_eno3lfb.cxx		\
 	prolongate_3d_rf2_vecpot.cxx			\
+	prolongate_3d_rf2_vecpot_groups.cxx		\
 	prolongate_3d_rf2_vecpot_test.cxx		\
 	reduction.cxx					\
 	schedule.cxx					\

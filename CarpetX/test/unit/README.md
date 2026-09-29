@@ -10,6 +10,7 @@ Toolkit testsuite can only be run where a full build exists.
 |---|---|
 | `test_vecpot_kernels` | the arithmetic in `src/prolongate_3d_rf2_vecpot_kernels.hxx`, against the identities the construction must satisfy |
 | `test_vecpot_interp` | the real interpolater, `src/prolongate_3d_rf2_vecpot.cxx`, compiled against the shim: iteration boxes, index-type conversions, `CoarseBox`, the three launches, mask handling |
+| `test_vecpot_tags` | the `vector_potential` group-tag parser and validator in `src/prolongate_3d_rf2_vecpot_groups.cxx`, against a synthetic group registry -- chiefly its error paths |
 | `test_vecpot_selftest` | `src/prolongate_3d_rf2_vecpot_test.cxx`, the self-test CarpetX runs at startup, so that it is known to build and pass before it reaches the toolkit |
 
 ## What is checked

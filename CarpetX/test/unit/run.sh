@@ -5,7 +5,7 @@ set -e
 cd "$(dirname "$0")"
 CXX=${CXX:-c++}
 status=0
-for t in test_vecpot_kernels test_vecpot_interp test_vecpot_selftest; do
+for t in test_vecpot_kernels test_vecpot_interp test_vecpot_selftest test_vecpot_tags; do
   echo "=== $t ==="
   $CXX -std=c++17 -O2 -Wall -Wextra -I shim -o "$t" "$t.cxx"
   ./"$t" || status=1

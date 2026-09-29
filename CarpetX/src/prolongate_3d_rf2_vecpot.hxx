@@ -11,6 +11,8 @@
 
 #include <AMReX_Interpolater.H>
 
+#include <array>
+
 namespace CarpetX {
 
 // Flux-preserving prolongation for an edge-staggered vector potential.
@@ -96,7 +98,12 @@ public:
 
 extern prolongate_3d_rf2_vecpot prolongate_vecpot_3d_rf2;
 
-// Self-test, run once from CarpetX_Startup.  Mirrors
+// Parse and validate the `vector_potential="Ax Ay Az"` group tag: the three
+// group indices in x, y, z order, or all -1 when this group is not part of a
+// triple.  Defined in prolongate_3d_rf2_vecpot_groups.cxx.
+std::array<int, dim> get_group_vector_potential(int gi);
+
+// Self-test, run once the first time the operator is selected.  Mirrors
 // CarpetX/test/unit/test_vecpot_kernels.cxx, which is the same check without
 // the Cactus dependency.
 void test_prolongate_3d_rf2_vecpot();

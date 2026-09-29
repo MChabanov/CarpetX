@@ -436,6 +436,23 @@ struct GHExt {
 
         amrex::Interpolater *interpolator;
 
+        // Vector-potential triple (PROLONG_A.md section 5.4).  The
+        // flux-preserving prolongation of an edge-staggered A_i couples the
+        // three components, so they must be prolonged together.  A group
+        // declares the triple with
+        //
+        //   TAGS='prolongation_type="vecpot"
+        //         vector_potential="Avec_x Avec_y Avec_z"'
+        //
+        // on every member.  `vecpot_groups` holds the three group indices in
+        // x, y, z order, or all -1 when this group is not part of a triple;
+        // `vecpot_direction` is this group's own slot, or -1.  Prolongation is
+        // dispatched once per triple, on the direction-0 member.
+        std::array<int, dim> vecpot_groups;
+        int vecpot_direction;
+        bool is_vecpot() const { return vecpot_direction >= 0; }
+        bool is_vecpot_leader() const { return vecpot_direction == 0; }
+
         std::array<std::array<boundary_t, dim>, 2> boundaries;
         bool all_faces_have_symmetries_or_boundaries() const;
         std::vector<std::array<int, dim> > parities;
