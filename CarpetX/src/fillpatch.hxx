@@ -112,10 +112,32 @@ void FillPatch_NewLevel(
 //
 // ("InterpFromCoarseLevel" for three coupled components.)
 void FillPatch_NewLevel_vecpot(
-    GHExt::PatchData::LevelData &leveldata,
+    const GHExt::PatchData::LevelData &leveldata,
     const GHExt::PatchData::LevelData &coarseleveldata,
     const std::array<int, dim> &groups, int tl, const amrex::Geometry &cgeom,
     const amrex::Geometry &fgeom);
+
+// Prolongate the ghosts of a vector-potential triple from the coarse level,
+// optionally with the same-level sync first (as FillPatch_ProlongateGhosts
+// versus FillPatch_ProlongateOnly).
+//
+// Unlike the scalar path this preserves the fine level's own data: an edge the
+// fine grid evolves is not part of the prolongation at all.  That is arranged
+// exactly as AMReX arranges it for FaceDivFree -- the destination patch is
+// snapped to whole coarse cells and pre-filled from the fine level, and a
+// solve mask per class of owning coarse object tells the operator which
+// entries it may write.  The operator's interior closure reads the destination
+// rather than the coarse data, so copied and prolonged faces need no branch.
+//
+// Runs synchronously rather than through the task managers.  The scalar path
+// overlaps its coarse-patch copy with other groups' work; doing the same here
+// means interleaving seven mask builds and three patch copies, which is worth
+// doing only once the operator has been exercised in a real run.
+void FillPatch_Prolongate_vecpot(
+    const GHExt::PatchData::LevelData &leveldata,
+    const GHExt::PatchData::LevelData &coarseleveldata,
+    const std::array<int, dim> &groups, int tl, const amrex::Geometry &fgeom,
+    const amrex::Geometry &cgeom, bool do_sync);
 
 // ("FillPatchTwoLevels")
 void FillPatch_RemakeLevel(

@@ -1,6 +1,7 @@
 #include "schedule.hxx"
 #include "driver.hxx"
 #include "fillpatch.hxx"
+#include "prolongate_3d_rf2_vecpot.hxx"
 #include "subcycling.hxx"
 #include "sync_restrict_internal.hxx"
 #include "task_manager.hxx"
@@ -15,6 +16,8 @@
 
 #include <array>
 #include <cassert>
+#include <mutex>
+#include <algorithm>
 #include <memory>
 #include <sstream>
 #include <vector>
@@ -77,6 +80,34 @@ static std::vector<int> sync_filter_groups(int numgroups, const int *groups0) {
       continue;
     groups.push_back(gi);
   }
+
+  // A vector-potential triple is prolonged in one pass, so syncing one
+  // component alone is not something the operator can honour.  Rather than
+  // reject such a SYNC -- which would make a correct-looking schedule fail --
+  // quietly extend the set to the whole triple, and say so once.  The other
+  // components would have had to be synced anyway.
+  {
+    const std::size_t ngroups0 = groups.size();
+    for (std::size_t n = 0; n < ngroups0; ++n) {
+      const std::array<int, dim> triple =
+          get_group_vector_potential(groups[n]);
+      if (triple[0] < 0)
+        continue;
+      for (int d = 0; d < dim; ++d) {
+        if (std::find(groups.begin(), groups.end(), triple[d]) != groups.end())
+          continue;
+        static std::once_flag warned;
+        std::call_once(warned, []() {
+          CCTK_VWARN(CCTK_WARN_ALERT,
+                     "A SYNC names only part of a vector_potential triple. The "
+                     "three components are prolonged together, so the missing "
+                     "ones are being synced as well.");
+        });
+        groups.push_back(triple[d]);
+      }
+    }
+  }
+
   return groups;
 }
 
@@ -220,8 +251,22 @@ SyncGroupsByDirIProlongateOnly_impl(const cGH *restrict cctkGH, int numgroups,
 
       for (int tl = tl_lo; tl < tl_hi; ++tl) {
 
-        tasks1.submit_serially([&tasks2, &tasks3, &leveldata, &groupdata,
-                                &coarsegroupdata, interpolator, tl]() {
+        tasks1.submit_serially([&tasks2, &tasks3, &leveldata, &coarseleveldata,
+                                &groupdata, &coarsegroupdata, interpolator,
+                                tl]() {
+          // A vector-potential triple is prolonged in one pass, from its x
+          // member; the components are coupled.
+          if (groupdata.is_vecpot()) {
+            if (groupdata.is_vecpot_leader())
+              FillPatch_Prolongate_vecpot(
+                  leveldata, coarseleveldata, groupdata.vecpot_groups, tl,
+                  ghext->patchdata.at(leveldata.patch)
+                      .amrcore->Geom(leveldata.level),
+                  ghext->patchdata.at(leveldata.patch)
+                      .amrcore->Geom(leveldata.level - 1),
+                  /*do_sync=*/false);
+            return;
+          }
           FillPatch_ProlongateOnly(tasks2, tasks3, groupdata, coarsegroupdata,
                                    *groupdata.mfab.at(tl),
                                    *coarsegroupdata.mfab.at(tl),
@@ -444,8 +489,20 @@ int SyncGroupsByDirI(const cGH *restrict cctkGH, int numgroups,
 
         for (int tl = 0; tl < sync_tl; ++tl) {
 
-          tasks1.submit_serially([&tasks2, &tasks3, &leveldata, &groupdata,
+          tasks1.submit_serially([&tasks2, &tasks3, &leveldata,
+                                  &coarseleveldata, &groupdata,
                                   &coarsegroupdata, interpolator, tl]() {
+            if (groupdata.is_vecpot()) {
+              if (groupdata.is_vecpot_leader())
+                FillPatch_Prolongate_vecpot(
+                    leveldata, coarseleveldata, groupdata.vecpot_groups, tl,
+                    ghext->patchdata.at(leveldata.patch)
+                        .amrcore->Geom(leveldata.level),
+                    ghext->patchdata.at(leveldata.patch)
+                        .amrcore->Geom(leveldata.level - 1),
+                    /*do_sync=*/true);
+              return;
+            }
             FillPatch_ProlongateGhosts(tasks2, tasks3, groupdata,
                                        coarsegroupdata, *groupdata.mfab.at(tl),
                                        *coarsegroupdata.mfab.at(tl),
@@ -629,9 +686,32 @@ int SyncGroupsByDirISubcycling(const cGH *restrict cctkGH, int numgroups,
             const amrex::MultiFab *const cmfab_old =
                 do_blend ? coarsegroupdata.mfab.at(1).get() : nullptr;
             const CCTK_REAL tl_w_new = do_blend ? w_new : CCTK_REAL(1);
-            tasks1.submit_serially([&tasks2, &tasks3, &leveldata, &groupdata,
+            tasks1.submit_serially([&tasks2, &tasks3, &leveldata,
+                                    &coarseleveldata, &groupdata,
                                     &coarsegroupdata, interpolator, tl,
                                     cmfab_old, tl_w_new]() {
+              if (groupdata.is_vecpot()) {
+                // The coarse patch would have to be a time blend of two
+                // snapshots, which the vector-potential path does not yet
+                // build.  A blended coarse edge is not the restriction of
+                // either fine state, so flux conservation across the
+                // refinement boundary would silently degrade rather than fail.
+                if (cmfab_old && tl_w_new != CCTK_REAL(1))
+                  CCTK_VERROR("Group %s is a vector potential and is being "
+                              "prolonged from a coarse level that is misaligned "
+                              "in time. Subcycling is not supported for "
+                              "prolongation_type=\"vecpot\" yet.",
+                              groupdata.groupname.c_str());
+                if (groupdata.is_vecpot_leader())
+                  FillPatch_Prolongate_vecpot(
+                      leveldata, coarseleveldata, groupdata.vecpot_groups, tl,
+                      ghext->patchdata.at(leveldata.patch)
+                          .amrcore->Geom(leveldata.level),
+                      ghext->patchdata.at(leveldata.patch)
+                          .amrcore->Geom(leveldata.level - 1),
+                      /*do_sync=*/true);
+                return;
+              }
               FillPatch_ProlongateGhosts(
                   tasks2, tasks3, groupdata, coarsegroupdata,
                   *groupdata.mfab.at(tl), *coarsegroupdata.mfab.at(tl),
