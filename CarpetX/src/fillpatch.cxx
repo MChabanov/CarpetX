@@ -317,13 +317,145 @@ vecpot_level gather(const GHExt::PatchData::LevelData &leveldata,
     r.mfab[d] = r.gd[d]->mfab.at(tl).get();
   }
   // The three MultiFabs share a decomposition and differ only in index type;
-  // that is what makes a single coarse patch geometry usable for all of them.
+  // that is what makes one coarse patch geometry usable for all of them.
   for (int d = 1; d < dim; ++d) {
     assert(r.mfab[d]->nComp() == r.mfab[0]->nComp());
     assert(r.mfab[d]->nGrowVect() == r.mfab[0]->nGrowVect());
     assert(r.mfab[d]->size() == r.mfab[0]->size());
   }
   return r;
+}
+
+// Index type of the coarse object that owns a class of fine edges
+// (PROLONG_A.md section 5.2).  AMReX convention here: 1 == NODE.
+IndexType vecpot_edge_ixtype(const int d) {
+  return IndexType(IntVect::TheNodeVector() - IntVect::TheDimensionVector(d));
+}
+IndexType vecpot_face_ixtype(const int f) {
+  return IndexType(IntVect::TheDimensionVector(f));
+}
+
+// Shared core of the coarse-to-fine fill for a triple.
+//
+// `dst` is written.  `fsrc` is the fine data that already exists and must be
+// preserved: it fixes the coarse-fine footprint, pre-fills the destination
+// patch, and defines the solve masks.  For a ghost fill `fsrc` is `dst`
+// itself; for a regrid it is the level's previous MultiFabs, and it is empty
+// on a level that has just been created.
+//
+// The two structural requirements of the operator are met here.  All three
+// coarse patches have their boundary conditions applied before any of them is
+// read, because prolonging A_x reads A_y and A_z.  And the destination patch
+// is snapped out to whole coarse cells, because the interior closure is
+// defined per coarse cell and needs all six of that cell's faces; the snapped
+// patches may overlap, which is harmless since the operator is a pure function
+// of its inputs and so the overlaps agree.
+void vecpot_fill_from_coarse(
+    const vecpot_level &dst,
+    const std::array<const MultiFab *, dim> &fsrc,
+    const std::array<const GHExt::PatchData::LevelData::GroupData *, dim> &cgd,
+    const std::array<const MultiFab *, dim> &cmfab, const Geometry &fgeom,
+    const Geometry &cgeom) {
+
+  const int ncomps = dst.mfab[0]->nComp();
+  const IntVect ratio{2, 2, 2};
+  const IntVect nghosts = dst.mfab[0]->nGrowVect();
+
+  const InterpolaterBoxCoarsener &coarsener =
+      prolongate_vecpot_3d_rf2.BoxCoarsener(ratio);
+
+  // One index-type independent decomposition for all three components: the
+  // recipe AMReX uses in its own Array-valued FillPatch.
+  const BoxArray dba_cc =
+      amrex::convert(dst.mfab[0]->boxArray(), IntVect::TheZeroVector());
+  const BoxArray sba_cc =
+      amrex::convert(fsrc[0]->boxArray(), IntVect::TheZeroVector());
+  const MultiFab dst_cc_dummy(dba_cc, dst.mfab[0]->DistributionMap(), ncomps,
+                              nghosts, MFInfo().SetAlloc(false));
+  const MultiFab src_cc_dummy(sba_cc, fsrc[0]->DistributionMap(), ncomps,
+                              nghosts, MFInfo().SetAlloc(false));
+  const EB2::IndexSpace *const index_space = nullptr;
+  const FabArrayBase::FPinfo &fpc =
+      FabArrayBase::TheFPinfo(src_cc_dummy, dst_cc_dummy, nghosts, coarsener,
+                              fgeom, cgeom, index_space);
+
+  if (fpc.ba_crse_patch.empty())
+    return; // nothing needs the coarser level
+
+  // Cell-centred footprint of the destination patch, snapped to whole coarse
+  // cells; see above.
+  const BoxArray rba_cc =
+      amrex::refine(amrex::coarsen(fpc.ba_fine_patch, ratio), ratio);
+
+  // A mask entry is 1 where the operator must solve and 0 where the fine level
+  // already owns the value.  "Known" is the existing fine data's box array,
+  // coarsened and converted to the owning object's index type, so that an
+  // object lying on the boundary of the fine region counts as known -- which
+  // is what the copy-from-fine rule requires, nodal data belonging to the
+  // boxes it bounds.
+  const auto build_mask = [&](const IndexType &ixt) {
+    iMultiFab mask = make_mf_crse_mask<iMultiFab>(fpc, ncomps, ixt, ratio);
+    const MultiFab known(amrex::convert(amrex::coarsen(sba_cc, ratio), ixt),
+                         fsrc[0]->DistributionMap(), ncomps, nghosts,
+                         MFInfo().SetAlloc(false));
+    const MultiFab solution(mask.boxArray(), mask.DistributionMap(), ncomps, 0,
+                            MFInfo().SetAlloc(false));
+    const FabArrayBase::CPC cpc(solution, IntVect::TheZeroVector(), known,
+                                IntVect::TheZeroVector(), cgeom.periodicity());
+    mask.setVal(1);                 // to solve
+    mask.setVal(0, cpc, 0, ncomps); // already known
+    return mask;
+  };
+
+  std::array<MultiFab, dim> cpatch, rpatch;
+  std::array<iMultiFab, dim> medge, mface;
+  for (int d = 0; d < dim; ++d) {
+    const IndexType ixt = dst.mfab[d]->boxArray().ixType();
+
+    cpatch[d] = make_mf_crse_patch<MultiFab>(fpc, ncomps, ixt);
+    mf_set_domain_bndry(cpatch[d], cgeom);
+    cpatch[d].ParallelCopy(*cmfab[d], 0, 0, ncomps,
+                           IntVect{0} /* don't use coarse ghosts */,
+                           cpatch[d].nGrowVect(), cgeom.periodicity());
+
+    rpatch[d].define(amrex::convert(rba_cc, ixt), fpc.dm_patch, ncomps, 0);
+    mf_set_domain_bndry(rpatch[d], fgeom);
+    // Pre-fill with the fine level's own values: those edges are evolved by
+    // the fine grid and must not be prolonged over.
+    rpatch[d].ParallelCopy(*fsrc[d], 0, 0, ncomps, nghosts, IntVect{0},
+                           fgeom.periodicity());
+
+    medge[d] = build_mask(vecpot_edge_ixtype(d));
+    mface[d] = build_mask(vecpot_face_ixtype(d));
+  }
+  iMultiFab mcell = build_mask(IndexType::TheCellType());
+
+  for (int d = 0; d < dim; ++d)
+    cgd[d]->apply_boundary_conditions(cpatch[d]);
+
+  const GpuArray<CCTK_REAL, dim> coarse_dx = cgeom.CellSizeArray();
+
+  for (MFIter mfi(rpatch[0]); mfi.isValid(); ++mfi) {
+    vecpot_masks masks;
+    for (int d = 0; d < dim; ++d) {
+      masks.edge[d] = &medge[d][mfi];
+      masks.face[d] = &mface[d][mfi];
+    }
+    masks.cell = &mcell[mfi];
+    const Array<const FArrayBox *, dim> cfab{&cpatch[0][mfi], &cpatch[1][mfi],
+                                             &cpatch[2][mfi]};
+    const Array<FArrayBox *, dim> ffab{&rpatch[0][mfi], &rpatch[1][mfi],
+                                       &rpatch[2][mfi]};
+    prolongate_vecpot_3d_rf2.interp_vecpot(cfab, 0, ffab, 0, ncomps,
+                                           rba_cc[mfi.index()], ratio, masks,
+                                           coarse_dx, RunOn::Gpu);
+  }
+
+  for (int d = 0; d < dim; ++d)
+    // ToGhost, not ParallelCopy: the snapped patch overlaps the destination's
+    // valid region, which the fine level owns.
+    dst.mfab[d]->ParallelCopyToGhost(rpatch[d], 0, 0, ncomps, IntVect{0},
+                                     nghosts);
 }
 
 } // namespace
@@ -350,9 +482,9 @@ void FillPatch_NewLevel_vecpot(
   const InterpolaterBoxCoarsener &coarsener =
       prolongate_vecpot_3d_rf2.BoxCoarsener(ratio);
 
-  // One cell-centred decomposition shared by all three components, so that the
-  // patches have matching box counts and distribution regardless of index type
-  // (the recipe AMReX uses in its own Array-valued FillPatch).
+  // A new level has no fine data at all, so there is no coarse-fine footprint
+  // to compute and no mask: every point is prolonged.  That makes this the
+  // simplest of the paths, and the natural one to bring up first.
   const BoxArray ba_cc =
       amrex::convert(fl.mfab[0]->boxArray(), IntVect::TheZeroVector());
 
@@ -366,7 +498,6 @@ void FillPatch_NewLevel_vecpot(
   for (int i = 0; i < nboxes; ++i) {
     Box t = amrex::grow(ba_cc[i], nghosts);
     t &= fdomain_g_cc;
-    // Snap out to whole coarse cells; see fillpatch.hxx.
     fba_snap.set(i, amrex::refine(amrex::coarsen(t, ratio), ratio));
     cba_g.set(i, coarsener.doit(t));
   }
@@ -380,18 +511,15 @@ void FillPatch_NewLevel_vecpot(
     fpatch[d].define(amrex::convert(fba_snap, ixt), dm, ncomps, 0);
   }
 
-  // All three coarse patches first, then the interpolation: prolonging A_x
-  // reads A_y and A_z, so a lazily applied boundary condition would be read
-  // before it was set.
   for (int d = 0; d < dim; ++d)
     cgd[d]->apply_boundary_conditions(cpatch[d]);
 
   const GpuArray<CCTK_REAL, dim> coarse_dx = cgeom.CellSizeArray();
-  const vecpot_masks masks; // a new level has no fine data to preserve
+  const vecpot_masks masks; // nothing to preserve
 
   for (MFIter mfi(fpatch[0]); mfi.isValid(); ++mfi) {
-    const Array<const FArrayBox *, dim> cfab{
-        &cpatch[0][mfi], &cpatch[1][mfi], &cpatch[2][mfi]};
+    const Array<const FArrayBox *, dim> cfab{&cpatch[0][mfi], &cpatch[1][mfi],
+                                             &cpatch[2][mfi]};
     const Array<FArrayBox *, dim> ffab{&fpatch[0][mfi], &fpatch[1][mfi],
                                        &fpatch[2][mfi]};
     prolongate_vecpot_3d_rf2.interp_vecpot(cfab, 0, ffab, 0, ncomps,
@@ -407,23 +535,43 @@ void FillPatch_NewLevel_vecpot(
   }
 }
 
-
-// Index type of the coarse object that owns a class of fine edges
-// (PROLONG_A.md section 5.2).  AMReX convention here: 1 == NODE.
-namespace {
-IndexType vecpot_edge_ixtype(const int d) {
-  return IndexType(IntVect::TheNodeVector() - IntVect::TheDimensionVector(d));
-}
-IndexType vecpot_face_ixtype(const int f) {
-  return IndexType(IntVect::TheDimensionVector(f));
-}
-} // namespace
-
 void FillPatch_Prolongate_vecpot(
     const GHExt::PatchData::LevelData &leveldata,
     const GHExt::PatchData::LevelData &coarseleveldata,
     const std::array<int, dim> &groups, const int tl, const Geometry &fgeom,
     const Geometry &cgeom, const bool do_sync) {
+
+  const vecpot_level fl = gather(leveldata, groups, tl);
+  if (fl.mfab[0]->nGrowVect().max() == 0)
+    return;
+
+  std::array<const GHExt::PatchData::LevelData::GroupData *, dim> cgd;
+  std::array<const MultiFab *, dim> cmfab;
+  std::array<const MultiFab *, dim> fsrc;
+  for (int d = 0; d < dim; ++d) {
+    cgd[d] = coarseleveldata.groupdata.at(groups[d]).get();
+    cmfab[d] = cgd[d]->mfab.at(tl).get();
+    fsrc[d] = fl.mfab[d]; // the fine data to preserve is the level's own
+  }
+
+  // Same-level exchange first, so that the pre-fill inside sees the fine
+  // level's ghost data as well as its interior.
+  if (do_sync)
+    for (int d = 0; d < dim; ++d)
+      fl.mfab[d]->FillBoundary(fgeom.periodicity());
+
+  vecpot_fill_from_coarse(fl, fsrc, cgd, cmfab, fgeom, cgeom);
+
+  for (int d = 0; d < dim; ++d)
+    fl.gd[d]->apply_boundary_conditions(*fl.mfab[d]);
+}
+
+void FillPatch_RemakeLevel_vecpot(
+    const GHExt::PatchData::LevelData &leveldata,
+    const GHExt::PatchData::LevelData &coarseleveldata,
+    const std::array<int, dim> &groups, const int tl,
+    const std::array<const amrex::MultiFab *, dim> &fmfab,
+    const Geometry &cgeom, const Geometry &fgeom) {
 
   const vecpot_level fl = gather(leveldata, groups, tl);
   std::array<const GHExt::PatchData::LevelData::GroupData *, dim> cgd;
@@ -433,117 +581,18 @@ void FillPatch_Prolongate_vecpot(
     cmfab[d] = cgd[d]->mfab.at(tl).get();
   }
 
-  const IntVect nghosts = fl.mfab[0]->nGrowVect();
-  if (nghosts.max() == 0)
-    return;
-
   const int ncomps = fl.mfab[0]->nComp();
-  const IntVect ratio{2, 2, 2};
+  const IntVect nghosts = fl.mfab[0]->nGrowVect();
 
-  // Same-level exchange first, so that the pre-fill below sees the fine
-  // level's ghost data as well as its interior.
-  if (do_sync)
-    for (int d = 0; d < dim; ++d)
-      fl.mfab[d]->FillBoundary(fgeom.periodicity());
-
-  const InterpolaterBoxCoarsener &coarsener =
-      prolongate_vecpot_3d_rf2.BoxCoarsener(ratio);
-
-  // One index-type independent decomposition for all three components.
-  const BoxArray fba_cc =
-      amrex::convert(fl.mfab[0]->boxArray(), IntVect::TheZeroVector());
-  const DistributionMapping &fdm = fl.mfab[0]->DistributionMap();
-  const MultiFab mf_cc_dummy(fba_cc, fdm, ncomps, nghosts,
-                             MFInfo().SetAlloc(false));
-  const EB2::IndexSpace *const index_space = nullptr;
-  const FabArrayBase::FPinfo &fpc =
-      FabArrayBase::TheFPinfo(mf_cc_dummy, mf_cc_dummy, nghosts, coarsener,
-                              fgeom, cgeom, index_space);
-
-  if (fpc.ba_crse_patch.empty()) {
-    // No coarser data is needed for these ghosts.
-    if (do_sync)
-      for (int d = 0; d < dim; ++d)
-        fl.gd[d]->apply_boundary_conditions(*fl.mfab[d]);
-    return;
-  }
-
-  // Cell-centred footprint of the destination patch: snapped to whole coarse
-  // cells, because the interior closure is defined per coarse cell.
-  const BoxArray rba_cc =
-      amrex::refine(amrex::coarsen(fpc.ba_fine_patch, ratio), ratio);
-
-  // A mask entry is 1 where the operator must solve and 0 where the fine level
-  // already owns the value.  "Known" is the fine level's own box array,
-  // coarsened and converted to the owning object's index type, so that an
-  // object lying on the boundary of the fine region counts as known -- which
-  // is what the copy-from-fine rule requires, since nodal data belongs to the
-  // boxes it bounds.
-  const auto build_mask = [&](const IndexType &ixt) {
-    iMultiFab mask = make_mf_crse_mask<iMultiFab>(fpc, ncomps, ixt, ratio);
-    const MultiFab known(amrex::convert(amrex::coarsen(fba_cc, ratio), ixt),
-                         fdm, ncomps, nghosts, MFInfo().SetAlloc(false));
-    const MultiFab solution(mask.boxArray(), mask.DistributionMap(), ncomps, 0,
-                            MFInfo().SetAlloc(false));
-    const FabArrayBase::CPC cpc(solution, IntVect::TheZeroVector(), known,
-                                IntVect::TheZeroVector(), cgeom.periodicity());
-    mask.setVal(1);                    // to solve
-    mask.setVal(0, cpc, 0, ncomps);    // already known
-    return mask;
-  };
-
-  std::array<MultiFab, dim> cpatch, rpatch;
-  std::array<iMultiFab, dim> medge, mface;
-  for (int d = 0; d < dim; ++d) {
-    const IndexType ixt = fl.mfab[d]->boxArray().ixType();
-
-    cpatch[d] = make_mf_crse_patch<MultiFab>(fpc, ncomps, ixt);
-    mf_set_domain_bndry(cpatch[d], cgeom);
-    cpatch[d].ParallelCopy(*cmfab[d], 0, 0, ncomps,
-                           IntVect{0} /* don't use coarse ghosts */,
-                           cpatch[d].nGrowVect(), cgeom.periodicity());
-
-    rpatch[d].define(amrex::convert(rba_cc, ixt), fpc.dm_patch, ncomps, 0);
-    mf_set_domain_bndry(rpatch[d], fgeom);
-    // Pre-fill with the fine level's own values: those edges are evolved by
-    // the fine grid and must not be prolonged over.
-    rpatch[d].ParallelCopy(*fl.mfab[d], 0, 0, ncomps, nghosts, IntVect{0},
-                           fgeom.periodicity());
-
-    medge[d] = build_mask(vecpot_edge_ixtype(d));
-    mface[d] = build_mask(vecpot_face_ixtype(d));
-  }
-  iMultiFab mcell = build_mask(IndexType::TheCellType());
-
-  // All three coarse patches before any interpolation: prolonging A_x reads
-  // A_y and A_z, so a lazily applied boundary condition would be read before
-  // it was set.
-  for (int d = 0; d < dim; ++d)
-    cgd[d]->apply_boundary_conditions(cpatch[d]);
-
-  const GpuArray<CCTK_REAL, dim> coarse_dx = cgeom.CellSizeArray();
-
-  for (MFIter mfi(rpatch[0]); mfi.isValid(); ++mfi) {
-    vecpot_masks masks;
-    for (int d = 0; d < dim; ++d) {
-      masks.edge[d] = &medge[d][mfi];
-      masks.face[d] = &mface[d][mfi];
-    }
-    masks.cell = &mcell[mfi];
-    const Array<const FArrayBox *, dim> cfab{&cpatch[0][mfi], &cpatch[1][mfi],
-                                             &cpatch[2][mfi]};
-    const Array<FArrayBox *, dim> ffab{&rpatch[0][mfi], &rpatch[1][mfi],
-                                       &rpatch[2][mfi]};
-    prolongate_vecpot_3d_rf2.interp_vecpot(cfab, 0, ffab, 0, ncomps,
-                                           rba_cc[mfi.index()], ratio, masks,
-                                           coarse_dx, RunOn::Gpu);
-  }
+  // The level's previous data is what must be preserved: it fixes the
+  // coarse-fine footprint, pre-fills the destination patch and defines the
+  // masks, exactly as the level's own data does during a ghost fill.
+  vecpot_fill_from_coarse(fl, fmfab, cgd, cmfab, fgeom, cgeom);
 
   for (int d = 0; d < dim; ++d) {
-    // ToGhost, not ParallelCopy: the snapped patch overlaps the fine level's
-    // valid region, which the fine level owns.
-    fl.mfab[d]->ParallelCopyToGhost(rpatch[d], 0, 0, ncomps, IntVect{0},
-                                    nghosts);
+    fl.mfab[d]->ParallelCopy(*fmfab[d], 0, 0, ncomps,
+                             IntVect{0} /* don't use old ghosts */, nghosts,
+                             fgeom.periodicity());
     fl.gd[d]->apply_boundary_conditions(*fl.mfab[d]);
   }
 }

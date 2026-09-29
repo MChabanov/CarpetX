@@ -1841,13 +1841,42 @@ void CactusAmrCore::RemakeLevel(const int level, const amrex::Real time,
             do_fill &= coarsegroupdata.valid.at(tl).at(vi).get().valid_all() &&
                        oldgroupdata.valid.at(tl).at(vi).get().valid_all();
 
+        // A vector-potential triple is remade in one pass, so it is fillable
+        // only if every member is: the components are coupled.
+        if (groupdata.is_vecpot() && !groupdata.do_evolve)
+          for (int d = 0; d < dim; ++d) {
+            const int gi1 = groupdata.vecpot_groups[d];
+            if (gi1 == gi)
+              continue;
+            const auto &restrict cgd1 = *coarseleveldata.groupdata.at(gi1);
+            const auto &restrict ogd1 = *oldleveldata.groupdata.at(gi1);
+            for (int vi = 0; vi < cgd1.numvars; ++vi)
+              do_fill &= cgd1.valid.at(tl).at(vi).get().valid_all() &&
+                         ogd1.valid.at(tl).at(vi).get().valid_all();
+          }
+
         if (do_fill) {
           // Copy from same level and/or prolongate from next coarser level
-          FillPatch_RemakeLevel(
-              groupdata, coarsegroupdata, *groupdata.mfab.at(tl),
-              *coarsegroupdata.mfab.at(tl), *oldgroupdata.mfab.at(tl),
-              patchdata.amrcore->Geom(level - 1),
-              patchdata.amrcore->Geom(level), interpolator, groupdata.bcrecs);
+          if (groupdata.is_vecpot()) {
+            if (groupdata.is_vecpot_leader()) {
+              std::array<const amrex::MultiFab *, dim> fmfab;
+              for (int d = 0; d < dim; ++d)
+                fmfab[d] = oldleveldata.groupdata.at(groupdata.vecpot_groups[d])
+                               ->mfab.at(tl)
+                               .get();
+              FillPatch_RemakeLevel_vecpot(
+                  leveldata, coarseleveldata, groupdata.vecpot_groups, tl,
+                  fmfab, patchdata.amrcore->Geom(level - 1),
+                  patchdata.amrcore->Geom(level));
+            }
+          } else {
+            FillPatch_RemakeLevel(
+                groupdata, coarsegroupdata, *groupdata.mfab.at(tl),
+                *coarsegroupdata.mfab.at(tl), *oldgroupdata.mfab.at(tl),
+                patchdata.amrcore->Geom(level - 1),
+                patchdata.amrcore->Geom(level), interpolator,
+                groupdata.bcrecs);
+          }
 
           for (int vi = 0; vi < groupdata.numvars; ++vi)
             groupdata.valid.at(tl).at(vi) = why_valid_t(

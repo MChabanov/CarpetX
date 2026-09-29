@@ -139,6 +139,17 @@ void FillPatch_Prolongate_vecpot(
     const std::array<int, dim> &groups, int tl, const amrex::Geometry &fgeom,
     const amrex::Geometry &cgeom, bool do_sync);
 
+// As FillPatch_RemakeLevel, for a triple.  `fmfab` is the level's previous
+// data: it fixes the coarse-fine footprint, pre-fills the destination and
+// defines the solve masks, exactly as the level's own data does during a ghost
+// fill, and is then copied over the result.
+void FillPatch_RemakeLevel_vecpot(
+    const GHExt::PatchData::LevelData &leveldata,
+    const GHExt::PatchData::LevelData &coarseleveldata,
+    const std::array<int, dim> &groups, int tl,
+    const std::array<const amrex::MultiFab *, dim> &fmfab,
+    const amrex::Geometry &cgeom, const amrex::Geometry &fgeom);
+
 // ("FillPatchTwoLevels")
 void FillPatch_RemakeLevel(
     const GHExt::PatchData::LevelData::GroupData &groupdata,
