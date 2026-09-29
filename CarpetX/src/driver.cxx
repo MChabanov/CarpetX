@@ -1625,15 +1625,60 @@ void CactusAmrCore::MakeNewLevelFromCoarse(
           for (int vi = 0; vi < groupdata.numvars; ++vi)
             do_fill &= coarsegroupdata.valid.at(tl).at(vi).get().valid_all();
         }
+        // A vector-potential triple is prolonged in one pass, so it is
+        // fillable only if every member is: the components are coupled.
+        if (groupdata.is_vecpot())
+          for (int d = 0; d < dim; ++d) {
+            const int gi1 = groupdata.vecpot_groups[d];
+            if (gi1 == gi)
+              continue;
+            const auto &restrict cgd1 = *coarseleveldata.groupdata.at(gi1);
+            if (groupdata.do_evolve) {
+              for (int vi = 0; vi < cgd1.numvars; ++vi)
+                error_if_invalid(cgd1, vi, tl, make_valid_all(), []() {
+                  return "MakeNewLevelFromCoarse before vector-potential "
+                         "prolongation";
+                });
+            } else {
+              for (int vi = 0; vi < cgd1.numvars; ++vi)
+                do_fill &= cgd1.valid.at(tl).at(vi).get().valid_all();
+            }
+          }
         if (do_fill) {
           for (int vi = 0; vi < groupdata.numvars; ++vi)
             check_valid_gf(
                 active_coarse_levels, gi, vi, tl, nan_handling,
                 []() { return "MakeNewLevelFromCoarse before prolongation"; });
-          FillPatch_NewLevel(
-              groupdata, coarsegroupdata, *groupdata.mfab.at(tl),
-              *coarsegroupdata.mfab.at(tl), patchdata.amrcore->Geom(level - 1),
-              patchdata.amrcore->Geom(level), interpolator, groupdata.bcrecs);
+          if (groupdata.is_vecpot()) {
+            // The three components are prolonged in one pass, driven from the
+            // x member; prolonging A_x reads A_y and A_z, so the coarse data
+            // of all three must be sound first.
+            for (int d = 0; d < dim; ++d) {
+              const int gi1 = groupdata.vecpot_groups[d];
+              if (gi1 == gi)
+                continue;
+              const auto &restrict cgd1 =
+                  *coarseleveldata.groupdata.at(gi1);
+              for (int vi = 0; vi < cgd1.numvars; ++vi)
+                check_valid_gf(active_coarse_levels, gi1, vi, tl, nan_handling,
+                               []() {
+                                 return "MakeNewLevelFromCoarse before "
+                                        "vector-potential prolongation";
+                               });
+            }
+            if (groupdata.is_vecpot_leader())
+              FillPatch_NewLevel_vecpot(leveldata, coarseleveldata,
+                                        groupdata.vecpot_groups, tl,
+                                        patchdata.amrcore->Geom(level - 1),
+                                        patchdata.amrcore->Geom(level));
+          } else {
+            FillPatch_NewLevel(
+                groupdata, coarsegroupdata, *groupdata.mfab.at(tl),
+                *coarsegroupdata.mfab.at(tl),
+                patchdata.amrcore->Geom(level - 1),
+                patchdata.amrcore->Geom(level), interpolator,
+                groupdata.bcrecs);
+          }
           const auto outer_valid =
               groupdata.all_faces_have_symmetries_or_boundaries()
                   ? make_valid_outer()

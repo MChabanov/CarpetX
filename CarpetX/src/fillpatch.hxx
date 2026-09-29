@@ -94,6 +94,29 @@ void FillPatch_NewLevel(
     const amrex::Geometry &cgeom, const amrex::Geometry &fgeom,
     amrex::Interpolater *mapper, const amrex::Vector<amrex::BCRec> &bcrecs);
 
+// Vector-potential triples.
+//
+// The flux-preserving prolongation of an edge-staggered A_i couples the three
+// components, so they are prolonged in one pass rather than group by group.
+// `groups` holds the three group indices in x, y, z order, as resolved by
+// get_group_vector_potential; the caller dispatches once, on the x member.
+//
+// Two things differ from the scalar paths and are the reason these need their
+// own entry points at all.  The three coarse patches must all have their
+// boundary conditions applied before any of them is read, because prolonging
+// A_x reads A_y and A_z.  And the fine target must be snapped out to whole
+// coarse cells, because the operator's interior closure is defined per coarse
+// cell and needs all six of that cell's faces; the snapped patches may
+// overlap, which is harmless since the operator is a pure function of the
+// coarse data and so the overlaps agree.
+//
+// ("InterpFromCoarseLevel" for three coupled components.)
+void FillPatch_NewLevel_vecpot(
+    GHExt::PatchData::LevelData &leveldata,
+    const GHExt::PatchData::LevelData &coarseleveldata,
+    const std::array<int, dim> &groups, int tl, const amrex::Geometry &cgeom,
+    const amrex::Geometry &fgeom);
+
 // ("FillPatchTwoLevels")
 void FillPatch_RemakeLevel(
     const GHExt::PatchData::LevelData::GroupData &groupdata,

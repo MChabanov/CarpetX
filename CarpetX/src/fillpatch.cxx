@@ -1,4 +1,5 @@
 #include "fillpatch.hxx"
+#include "prolongate_3d_rf2_vecpot.hxx"
 #include "schedule.hxx"
 
 #include <utility>
@@ -293,6 +294,117 @@ void FillPatch_RemakeLevel(
   mfab.ParallelCopy(fmfab, 0, 0, ncomps, IntVect{0} /* don't use old ghosts */,
                     nghosts, fgeom.periodicity());
   groupdata.apply_boundary_conditions(mfab);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Vector-potential triples.  See fillpatch.hxx for the contract.
+
+namespace {
+
+// The three components of a triple, gathered from a level.
+struct vecpot_level {
+  std::array<GHExt::PatchData::LevelData::GroupData *, dim> gd;
+  std::array<MultiFab *, dim> mfab;
+};
+
+vecpot_level gather(GHExt::PatchData::LevelData &leveldata,
+                    const std::array<int, dim> &groups, const int tl) {
+  vecpot_level r;
+  for (int d = 0; d < dim; ++d) {
+    r.gd[d] = leveldata.groupdata.at(groups[d]).get();
+    assert(!r.gd[d]->mfab.empty());
+    r.mfab[d] = r.gd[d]->mfab.at(tl).get();
+  }
+  // The three MultiFabs share a decomposition and differ only in index type;
+  // that is what makes a single coarse patch geometry usable for all of them.
+  for (int d = 1; d < dim; ++d) {
+    assert(r.mfab[d]->nComp() == r.mfab[0]->nComp());
+    assert(r.mfab[d]->nGrowVect() == r.mfab[0]->nGrowVect());
+    assert(r.mfab[d]->size() == r.mfab[0]->size());
+  }
+  return r;
+}
+
+} // namespace
+
+void FillPatch_NewLevel_vecpot(
+    GHExt::PatchData::LevelData &leveldata,
+    const GHExt::PatchData::LevelData &coarseleveldata,
+    const std::array<int, dim> &groups, const int tl, const Geometry &cgeom,
+    const Geometry &fgeom) {
+
+  const vecpot_level fl = gather(leveldata, groups, tl);
+  std::array<const GHExt::PatchData::LevelData::GroupData *, dim> cgd;
+  std::array<const MultiFab *, dim> cmfab;
+  for (int d = 0; d < dim; ++d) {
+    cgd[d] = coarseleveldata.groupdata.at(groups[d]).get();
+    cmfab[d] = cgd[d]->mfab.at(tl).get();
+  }
+
+  const int ncomps = fl.mfab[0]->nComp();
+  const IntVect ratio{2, 2, 2};
+  const IntVect nghosts = fl.mfab[0]->nGrowVect();
+  const DistributionMapping &dm = fl.mfab[0]->DistributionMap();
+
+  const InterpolaterBoxCoarsener &coarsener =
+      prolongate_vecpot_3d_rf2.BoxCoarsener(ratio);
+
+  // One cell-centred decomposition shared by all three components, so that the
+  // patches have matching box counts and distribution regardless of index type
+  // (the recipe AMReX uses in its own Array-valued FillPatch).
+  const BoxArray ba_cc =
+      amrex::convert(fl.mfab[0]->boxArray(), IntVect::TheZeroVector());
+
+  Box fdomain_g_cc = amrex::convert(fgeom.Domain(), IntVect::TheZeroVector());
+  for (int d = 0; d < dim; ++d)
+    if (fgeom.isPeriodic(d))
+      fdomain_g_cc.grow(d, nghosts[d]);
+
+  const int nboxes = ba_cc.size();
+  BoxArray fba_snap(nboxes), cba_g(nboxes);
+  for (int i = 0; i < nboxes; ++i) {
+    Box t = amrex::grow(ba_cc[i], nghosts);
+    t &= fdomain_g_cc;
+    // Snap out to whole coarse cells; see fillpatch.hxx.
+    fba_snap.set(i, amrex::refine(amrex::coarsen(t, ratio), ratio));
+    cba_g.set(i, coarsener.doit(t));
+  }
+
+  std::array<MultiFab, dim> cpatch, fpatch;
+  for (int d = 0; d < dim; ++d) {
+    const IndexType ixt = fl.mfab[d]->boxArray().ixType();
+    cpatch[d].define(amrex::convert(cba_g, ixt), dm, ncomps, 0);
+    mf_set_domain_bndry(cpatch[d], cgeom);
+    cpatch[d].ParallelCopy(*cmfab[d], 0, 0, ncomps, cgeom.periodicity());
+    fpatch[d].define(amrex::convert(fba_snap, ixt), dm, ncomps, 0);
+  }
+
+  // All three coarse patches first, then the interpolation: prolonging A_x
+  // reads A_y and A_z, so a lazily applied boundary condition would be read
+  // before it was set.
+  for (int d = 0; d < dim; ++d)
+    cgd[d]->apply_boundary_conditions(cpatch[d]);
+
+  const GpuArray<CCTK_REAL, dim> coarse_dx = cgeom.CellSizeArray();
+  const vecpot_masks masks; // a new level has no fine data to preserve
+
+  for (MFIter mfi(fpatch[0]); mfi.isValid(); ++mfi) {
+    const Array<const FArrayBox *, dim> cfab{
+        &cpatch[0][mfi], &cpatch[1][mfi], &cpatch[2][mfi]};
+    const Array<FArrayBox *, dim> ffab{&fpatch[0][mfi], &fpatch[1][mfi],
+                                       &fpatch[2][mfi]};
+    prolongate_vecpot_3d_rf2.interp_vecpot(cfab, 0, ffab, 0, ncomps,
+                                           fba_snap[mfi.index()], ratio, masks,
+                                           coarse_dx, RunOn::Gpu);
+  }
+
+  for (int d = 0; d < dim; ++d) {
+    fl.mfab[d]->ParallelCopy(fpatch[d], 0, 0, ncomps,
+                             IntVect{0} /* no ghosts from the buffer */,
+                             nghosts);
+    fl.gd[d]->apply_boundary_conditions(*fl.mfab[d]);
+  }
 }
 
 } // namespace CarpetX

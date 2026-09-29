@@ -136,6 +136,23 @@ inline Box coarsen(const Box &b, const IntVect &r) {
   return Box(l, h, b.typ);
 }
 inline Box coarsen(const Box &b, int r) { return coarsen(b, IntVect(r)); }
+inline Box refine(const Box &b, const IntVect &r) {
+  assert(b.ixType().cellCentered());
+  IntVect l, h;
+  for (int d = 0; d < 3; ++d) {
+    l[d] = b.lo[d] * r[d];
+    h[d] = (b.hi[d] + 1) * r[d] - 1;
+  }
+  return Box(l, h, b.typ);
+}
+inline Box refine(const Box &b, int r) { return refine(b, IntVect(r)); }
+inline Box grow(Box b, const IntVect &n) {
+  for (int d = 0; d < 3; ++d) {
+    b.lo[d] -= n[d];
+    b.hi[d] += n[d];
+  }
+  return b;
+}
 
 template <typename T> struct Array4 {
   T *p = nullptr;

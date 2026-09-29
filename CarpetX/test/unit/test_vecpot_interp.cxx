@@ -266,6 +266,42 @@ int main() {
     check("all-unknown mask == null mask", e2, 0);
   }
 
+  // ---- CoarseBox is sufficient -------------------------------------------
+  {
+    std::printf("\n[6] CoarseBox covers every coarse index the operator reads\n");
+    // Allocate the coarse FABs on exactly CoarseBox(target) and the fine FABs
+    // on exactly the target, then run.  The shim's Array4 aborts on an
+    // out-of-range access, so a clean run means CoarseBox is not under-sized
+    // and the operator writes nothing outside its target -- the two invariants
+    // the FillPatch buffers depend on, and the two that would be silent
+    // corruption rather than a crash in a real build.
+    int cases = 0;
+    const int los[] = {0, -3, 5, -8};
+    const int exts[] = {2, 4, 7, 6}; // fine cells per direction
+    for (int c = 0; c < 4; ++c) {
+      const int l = los[c], e = exts[c];
+      const Box tgt(IntVect(l, l + 1, l - 2),
+                    IntVect(l + e - 1, l + e, l + e - 3));
+      const Box snap = refine(coarsen(tgt, IntVect(2)), IntVect(2));
+      const Box cb = prolongate_vecpot_3d_rf2.CoarseBox(snap, 2);
+
+      FArrayBox ccx(convert(cb, edge_t(0)), 1), ccy(convert(cb, edge_t(1)), 1),
+          ccz(convert(cb, edge_t(2)), 1);
+      FArrayBox ffx(convert(snap, edge_t(0)), 1),
+          ffy(convert(snap, edge_t(1)), 1), ffz(convert(snap, edge_t(2)), 1);
+      for (auto *f : {&ccx, &ccy, &ccz})
+        for (auto &v : f->data)
+          v = nd(rng);
+      Array<const FArrayBox *, 3> cc{{&ccx, &ccy, &ccz}};
+      Array<FArrayBox *, 3> ff{{&ffx, &ffy, &ffz}};
+      prolongate_vecpot_3d_rf2.interp_vecpot(cc, 0, ff, 0, 1, snap, IntVect(2),
+                                             nomask, coarse_dx, RunOn::Cpu);
+      ++cases;
+    }
+    std::printf("  %-58s %10d  ok\n",
+                "target boxes run with exactly-sized buffers", cases);
+  }
+
   std::printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
               failures == 1 ? "" : "s");
   return failures ? 1 : 0;
